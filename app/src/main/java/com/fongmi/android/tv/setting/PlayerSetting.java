@@ -8,6 +8,33 @@ import com.github.catvod.utils.Prefers;
 
 public class PlayerSetting {
 
+    public static final int EXO = 0;
+    public static final int IJK = 1;
+    public static final int NONE = -1;
+
+    public static int getPlayer() {
+        int player = Prefers.getInt("player", EXO);
+        if (isPlayer(player)) return player;
+        putPlayer(EXO);
+        return EXO;
+    }
+
+    public static void putPlayer(int player) {
+        Prefers.put("player", sanitizePlayer(player));
+    }
+
+    public static boolean isPlayer(int player) {
+        return player == EXO || player == IJK;
+    }
+
+    public static int sanitizePlayer(int player) {
+        return player == IJK ? IJK : EXO;
+    }
+
+    public static int resolvePlayer(int player) {
+        return isPlayer(player) ? player : getPlayer();
+    }
+
     public static int getRender() {
         return Prefers.getInt("render", 0);
     }
@@ -48,6 +75,22 @@ public class PlayerSetting {
         Prefers.put("background", background);
     }
 
+    public static boolean isMusicNotification() {
+        return Prefers.getBoolean("audio_music_notification", true);
+    }
+
+    public static void putMusicNotification(boolean notification) {
+        Prefers.put("audio_music_notification", notification);
+    }
+
+    public static boolean isAudioBookNotification() {
+        return Prefers.getBoolean("audio_book_notification", true);
+    }
+
+    public static void putAudioBookNotification(boolean notification) {
+        Prefers.put("audio_book_notification", notification);
+    }
+
     public static boolean isBackgroundOff() {
         return getBackground() == 0;
     }
@@ -66,6 +109,54 @@ public class PlayerSetting {
 
     public static void putSpeed(float speed) {
         Prefers.put("speed", speed);
+    }
+
+    public static boolean isDisplayTime() {
+        return Prefers.getBoolean("display_time");
+    }
+
+    public static void putDisplayTime(boolean displayTime) {
+        Prefers.put("display_time", displayTime);
+    }
+
+    public static boolean isDisplayTraffic() {
+        return Prefers.getBoolean("display_traffic");
+    }
+
+    public static void putDisplayTraffic(boolean displayTraffic) {
+        Prefers.put("display_traffic", displayTraffic);
+    }
+
+    public static boolean isDisplaySize() {
+        return Prefers.getBoolean("display_size", true);
+    }
+
+    public static void putDisplaySize(boolean displaySize) {
+        Prefers.put("display_size", displaySize);
+    }
+
+    public static boolean isDisplayProgress() {
+        return Prefers.getBoolean("display_progress", true);
+    }
+
+    public static void putDisplayProgress(boolean displayProgress) {
+        Prefers.put("display_progress", displayProgress);
+    }
+
+    public static boolean isDisplayMini() {
+        return Prefers.getBoolean("display_mini");
+    }
+
+    public static void putDisplayMini(boolean displayMini) {
+        Prefers.put("display_mini", displayMini);
+    }
+
+    public static boolean isDisplayTitle() {
+        return Prefers.getBoolean("display_title", true);
+    }
+
+    public static void putDisplayTitle(boolean displayTitle) {
+        Prefers.put("display_title", displayTitle);
     }
 
     public static boolean isCaption() {

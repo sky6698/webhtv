@@ -1,6 +1,8 @@
 package com.fongmi.android.tv.player.exo;
 
+import androidx.media3.common.C;
 import androidx.media3.common.Format;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.Player;
 import androidx.media3.common.TrackGroup;
 import androidx.media3.common.TrackSelectionOverride;
@@ -24,6 +26,21 @@ public class TrackUtil {
         player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon().clearOverrides().build());
     }
 
+    public static boolean preferAAC(Player player) {
+        TrackInfo info = findAAC(player);
+        if (info == null) return false;
+        if (info.trackGroup.isTrackSelected(info.trackIndex)) return false;
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon().setOverrideForType(new TrackSelectionOverride(info.trackGroup.getMediaTrackGroup(), List.of(info.trackIndex))).build());
+        return true;
+    }
+
+    public static boolean hasTrack(Player player, List<Track> tracks, int type) {
+        for (Track track : tracks) {
+            if (track.getType() == type && find(player, track) != null) return true;
+        }
+        return false;
+    }
+
     private static TrackInfo find(Player player, Track track) {
         if (track.getFormat() == null) return null;
         Tracks currentTracks = player.getCurrentTracks();
@@ -37,6 +54,29 @@ public class TrackUtil {
             }
         }
         return null;
+    }
+
+    private static TrackInfo findAAC(Player player) {
+        TrackInfo best = null;
+        for (Tracks.Group trackGroup : player.getCurrentTracks().getGroups()) {
+            if (trackGroup.getType() != C.TRACK_TYPE_AUDIO) continue;
+            for (int i = 0; i < trackGroup.length; i++) {
+                Format format = trackGroup.getTrackFormat(i);
+                if (!trackGroup.isTrackSupported(i) || !isAAC(format)) continue;
+                TrackInfo info = new TrackInfo(trackGroup, i);
+                if (best == null || getBitrate(format) > getBitrate(best.trackGroup.getTrackFormat(best.trackIndex))) best = info;
+            }
+        }
+        return best;
+    }
+
+    private static boolean isAAC(Format format) {
+        String codecs = format.codecs == null ? "" : format.codecs.toLowerCase();
+        return MimeTypes.AUDIO_AAC.equals(format.sampleMimeType) || codecs.contains("mp4a") || codecs.contains("aac");
+    }
+
+    private static int getBitrate(Format format) {
+        return Math.max(format.averageBitrate, format.peakBitrate);
     }
 
     public static void setTrackSelection(Player player, List<Track> tracks) {

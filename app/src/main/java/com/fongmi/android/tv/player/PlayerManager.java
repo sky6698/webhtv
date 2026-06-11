@@ -4,6 +4,8 @@ import android.net.Uri;
 import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
+import androidx.media3.common.C;
+import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.MediaTitle;
@@ -23,8 +25,10 @@ import com.fongmi.android.tv.bean.Sub;
 import com.fongmi.android.tv.bean.Track;
 import com.fongmi.android.tv.impl.ParseCallback;
 import com.fongmi.android.tv.player.engine.ExoPlayerEngine;
+import com.fongmi.android.tv.player.engine.IjkPlayerEngine;
 import com.fongmi.android.tv.player.engine.PlaySpec;
 import com.fongmi.android.tv.player.engine.PlayerEngine;
+import com.fongmi.android.tv.player.exo.TrackUtil;
 import com.fongmi.android.tv.setting.DanmakuSetting;
 import com.fongmi.android.tv.setting.PlayerSetting;
 import com.fongmi.android.tv.utils.Notify;
@@ -51,11 +55,13 @@ public class PlayerManager implements ParseCallback {
     private Player player;
 
     private boolean initTrack;
+    private int playerType;
     private int retry;
 
     public PlayerManager(Callback callback) {
         this.runnable = () -> callback.onError(ResUtil.getString(R.string.error_play_timeout));
-        this.engine = new ExoPlayerEngine(PlayerEngine.HARD, listener);
+        this.playerType = PlayerSetting.getPlayer();
+        this.engine = buildEngine(playerType, PlayerEngine.HARD);
         this.player = engine.getPlayer();
         this.callback = callback;
     }
@@ -177,12 +183,73 @@ public class PlayerManager implements ParseCallback {
         return (getVideoWidth() == 0 && getVideoHeight() == 0) ? "" : getVideoWidth() + " x " + getVideoHeight();
     }
 
+    public String getVideoParamsText() {
+        StringBuilder builder = new StringBuilder();
+        append(builder, "分辨率", getSizeText());
+        Format video = getSelectedFormat(C.TRACK_TYPE_VIDEO);
+        Format audio = getSelectedFormat(C.TRACK_TYPE_AUDIO);
+        if (video != null) {
+            if (video.frameRate > 0) append(builder, "帧率", String.format(Locale.getDefault(), "%.2f fps", video.frameRate));
+            append(builder, "视频编码", firstText(video.codecs, video.sampleMimeType, video.containerMimeType));
+            append(builder, "视频码率", formatBitrate(video.averageBitrate > 0 ? video.averageBitrate : video.peakBitrate));
+        }
+        if (audio != null) {
+            append(builder, "音频编码", firstText(audio.codecs, audio.sampleMimeType, audio.containerMimeType));
+            append(builder, "采样率", audio.sampleRate > 0 ? audio.sampleRate + " Hz" : "");
+            append(builder, "声道", audio.channelCount > 0 ? String.valueOf(audio.channelCount) : "");
+            append(builder, "音频码率", formatBitrate(audio.averageBitrate > 0 ? audio.averageBitrate : audio.peakBitrate));
+        }
+        append(builder, "解码", getDecodeText());
+        append(builder, "倍速", getSpeedText());
+        append(builder, "时长", getDurationTime());
+        return builder.toString();
+    }
+
     public String getSpeedText() {
         return String.format(Locale.getDefault(), "%.2f", getSpeed());
     }
 
     public String getDecodeText() {
         return engine.getDecodeText();
+    }
+
+    public String getPlayerText() {
+        return ResUtil.getStringArray(R.array.select_player)[playerType];
+    }
+
+    public int getPlayerType() {
+        return playerType;
+    }
+
+    public boolean isIjk() {
+        return playerType == PlayerSetting.IJK;
+    }
+
+    private Format getSelectedFormat(int type) {
+        Tracks tracks = getCurrentTracks();
+        if (tracks == null || tracks.isEmpty()) return null;
+        for (Tracks.Group group : tracks.getGroups()) {
+            if (group.getType() != type) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (group.isTrackSelected(i)) return group.getTrackFormat(i);
+            }
+        }
+        return null;
+    }
+
+    private static void append(StringBuilder builder, String name, String value) {
+        if (TextUtils.isEmpty(value)) return;
+        builder.append(name).append(" : ").append(value).append("\n");
+    }
+
+    private static String firstText(String... values) {
+        for (String value : values) if (!TextUtils.isEmpty(value)) return value;
+        return "";
+    }
+
+    private static String formatBitrate(int bitrate) {
+        if (bitrate <= 0) return "";
+        return bitrate >= 1_000_000 ? String.format(Locale.getDefault(), "%.2f Mbps", bitrate / 1_000_000f) : bitrate / 1000 + " Kbps";
     }
 
     public String getPositionTime(long delta) {
@@ -337,9 +404,37 @@ public class PlayerManager implements ParseCallback {
         setMediaItem();
     }
 
+    public void togglePlayer() {
+        switchPlayer(playerType == PlayerSetting.EXO ? PlayerSetting.IJK : PlayerSetting.EXO);
+    }
+
+    public void switchPlayer(int type) {
+        if (engine == null || player == null) return;
+        type = PlayerSetting.sanitizePlayer(type);
+        if (type == playerType) return;
+        long position = getPosition();
+        float speed = getSpeed();
+        boolean repeat = isRepeatOne();
+        int decode = engine.getDecode();
+        engine.release();
+        playerType = type;
+        engine = buildEngine(playerType, decode);
+        player = engine.getPlayer();
+        callback.onPlayerRebuild(player);
+        if (spec == null || spec.getUrl() == null) return;
+        setMediaItem();
+        if (position > 0) seekTo(position);
+        if (speed != 1f) setSpeed(speed);
+        setRepeatOne(repeat);
+    }
+
     private void rebuildPlayer() {
         player = engine.rebuild(listener);
         callback.onPlayerRebuild(player);
+    }
+
+    private PlayerEngine buildEngine(int type, int decode) {
+        return type == 1 ? new IjkPlayerEngine(decode, listener) : new ExoPlayerEngine(decode, listener);
     }
 
     public void browse(PlaySpec spec) {
@@ -473,7 +568,9 @@ public class PlayerManager implements ParseCallback {
         @Override
         public void onTracksChanged(@NonNull Tracks tracks) {
             if (tracks.isEmpty() || initTrack) return;
-            setTrack(Track.find(getKey()));
+            List<Track> savedTracks = Track.find(getKey());
+            setTrack(savedTracks);
+            if (PlayerSetting.isPreferAAC() && !TrackUtil.hasTrack(player, savedTracks, C.TRACK_TYPE_AUDIO)) TrackUtil.preferAAC(player);
             callback.onTracksChanged();
             initTrack = true;
         }
