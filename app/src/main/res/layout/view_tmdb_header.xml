@@ -312,6 +312,39 @@
         android:visibility="gone"
         app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
 
+    <!-- OMDB 多来源评分标题 -->
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/tmdbOmdbRatingsLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="16dp"
+        android:text="@string/tmdb_ratings_label"
+        android:textColor="@android:color/white"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        tools:visibility="visible" />
+
+    <!-- OMDB 多来源评分容器（IMDb / 烂番茄 / Metacritic 等） -->
+    <HorizontalScrollView
+        android:id="@+id/tmdbOmdbRatingsScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="16dp"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <androidx.appcompat.widget.LinearLayoutCompat
+            android:id="@+id/tmdbOmdbRatings"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+
+    </HorizontalScrollView>
+
     <!-- TMDB 水印 + 分隔 -->
     <com.google.android.material.textview.MaterialTextView
         android:layout_width="wrap_content"

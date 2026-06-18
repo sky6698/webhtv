@@ -87,6 +87,13 @@ public class ProgressLayout extends RelativeLayout {
         switchState(State.CONTENT);
     }
 
+    // 强制把内容视图重新隐藏（仅在 PROGRESS/EMPTY 态有意义）：
+    // 用于内容填充（如 setText）在 loading 期间把部分子视图改回 VISIBLE 后，重新压回隐藏，避免泄漏
+    public void hideContent() {
+        if (mState == State.CONTENT) return;
+        setContentVisibility(false);
+    }
+
     public void showContent(boolean flag, int size) {
         if (flag && size == 0) showEmpty();
         else showContent();

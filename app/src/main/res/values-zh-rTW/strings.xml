@@ -671,7 +671,7 @@
     <string name="dialog_tmdb_api_key_label">TMDB API Key 或 Access Token</string>
     <string name="dialog_tmdb_api_key_hint">輸入 API Key 或 v4 Access Token</string>
     <string name="dialog_tmdb_api_key_tip">免費獲取 API Key: https://www.themoviedb.org/settings/api</string>
-    <string name="dialog_omdb_api_key_label">OMDb API Key（可選，用於 IMDb 評分）</string>
+    <string name="dialog_omdb_api_key_label">OMDb API Key（可選，用於 IMDB 評分）</string>
     <string name="dialog_omdb_api_key_hint">輸入 OMDb API Key</string>
     <string name="dialog_omdb_api_key_tip">免費獲取 API Key（每天1000次）: https://www.omdbapi.com/apikey.aspx</string>
     <string name="dialog_tmdb_enable_label">啟用 TMDB 元數據增強</string>
@@ -702,6 +702,8 @@
     <string name="detail_no_overview">暫無簡介</string>
     <string name="detail_image_rotate">旋轉</string>
     <string name="tmdb_external_links_label">外部連結</string>
+    <string name="tmdb_ratings_label">評分與數據</string>
+    <string name="tmdb_ratings_votes">人評分</string>
 
     <string-array name="select_search_column">
         <item>自適應</item>

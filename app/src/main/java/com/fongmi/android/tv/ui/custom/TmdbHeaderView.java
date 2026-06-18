@@ -196,6 +196,9 @@ public class TmdbHeaderView {
         // 外部链接
         setupExternalLinks(adapter);
 
+        // OMDB 多来源评分（IMDb / 烂番茄 / Metacritic 等）
+        setupOmdbRatings(adapter);
+
         // 猜你喜欢
         if (!adapter.getRecommendations().isEmpty()) {
             headerRoot.findViewById(R.id.tmdbRecommendationsLabel).setVisibility(View.VISIBLE);
@@ -518,13 +521,13 @@ public class TmdbHeaderView {
             container.addView(createRatingChip("TMDB", tmdbRating, "#21D07A"));
         }
 
-        // IMDb 评分（异步获取）
+        // IMDB 评分（异步获取）
         if (externalIds != null && externalIds.has("imdb_id") && !externalIds.get("imdb_id").isJsonNull()) {
             String imdbId = externalIds.get("imdb_id").getAsString();
             if (!TextUtils.isEmpty(imdbId)) {
-                com.google.android.material.textview.MaterialTextView imdbChip = createRatingChip("IMDb", "...", "#F5C518");
+                com.google.android.material.textview.MaterialTextView imdbChip = createRatingChip("IMDB", "...", "#F5C518");
                 container.addView(imdbChip);
-                // 异步获取 IMDb 评分
+                // 异步获取 IMDB 评分
                 com.fongmi.android.tv.bean.TmdbConfig tmdbConfig = com.fongmi.android.tv.bean.TmdbConfig.objectFrom(com.fongmi.android.tv.setting.Setting.getTmdbConfig());
                 String omdbApiKey = tmdbConfig.getOmdbApiKey();
                 if (!TextUtils.isEmpty(omdbApiKey)) {
@@ -570,7 +573,7 @@ public class TmdbHeaderView {
     }
 
     /**
-     * 异步获取 IMDb 评分并更新 Chip
+     * 异步获取 IMDB 评分并更新 Chip
      */
     private void fetchImdbRatingForChip(String imdbId, String omdbApiKey, com.google.android.material.textview.MaterialTextView chip) {
         com.fongmi.android.tv.utils.Task.execute(() -> {
@@ -595,7 +598,7 @@ public class TmdbHeaderView {
                     String rating = jsonObj.get("imdbRating").getAsString();
                     if (!TextUtils.isEmpty(rating) && !"N/A".equals(rating)) {
                         activity.runOnUiThread(() -> {
-                            chip.setText("IMDb ★ " + rating);
+                            chip.setText("IMDB ★ " + rating);
                             chip.setVisibility(View.VISIBLE);
                         });
                     } else {
@@ -608,6 +611,192 @@ public class TmdbHeaderView {
                 activity.runOnUiThread(() -> chip.setVisibility(View.GONE));
             }
         });
+    }
+
+    /**
+     * 设置 OMDB 多来源评分区域。
+     *
+     * 仅当配置了 OMDB API Key、能拿到 IMDb ID 且 OMDB 返回有效数据时显示，
+     * 否则隐藏整个区域。展示 IMDb 评分（含投票数）、烂番茄、Metacritic 等多来源评分。
+     */
+    private void setupOmdbRatings(TmdbUIAdapter adapter) {
+        com.google.android.material.textview.MaterialTextView label = headerRoot.findViewById(R.id.tmdbOmdbRatingsLabel);
+        View scroll = headerRoot.findViewById(R.id.tmdbOmdbRatingsScroll);
+        ViewGroup container = headerRoot.findViewById(R.id.tmdbOmdbRatings);
+        label.setVisibility(View.GONE);
+        scroll.setVisibility(View.GONE);
+        container.removeAllViews();
+
+        JsonObject detail = adapter.getTmdbDetail();
+        if (detail == null) {
+            android.util.Log.d("TmdbHeaderView", "OMDB 评分跳过：detail 为空");
+            return;
+        }
+
+        // 取 IMDb ID
+        JsonObject externalIds = detail.has("external_ids") && !detail.get("external_ids").isJsonNull()
+                ? detail.getAsJsonObject("external_ids") : null;
+        if (externalIds == null || !externalIds.has("imdb_id") || externalIds.get("imdb_id").isJsonNull()) {
+            android.util.Log.d("TmdbHeaderView", "OMDB 评分跳过：无 external_ids/imdb_id，detail keys=" + detail.keySet());
+            return;
+        }
+        String imdbId = externalIds.get("imdb_id").getAsString();
+        if (TextUtils.isEmpty(imdbId)) {
+            android.util.Log.d("TmdbHeaderView", "OMDB 评分跳过：imdb_id 为空");
+            return;
+        }
+
+        // 必须配置 OMDB API Key
+        com.fongmi.android.tv.bean.TmdbConfig tmdbConfig = com.fongmi.android.tv.bean.TmdbConfig.objectFrom(com.fongmi.android.tv.setting.Setting.getTmdbConfig());
+        String omdbApiKey = tmdbConfig.getOmdbApiKey();
+        if (TextUtils.isEmpty(omdbApiKey)) {
+            android.util.Log.d("TmdbHeaderView", "OMDB 评分跳过：未配置 OMDB API Key");
+            return;
+        }
+
+        android.util.Log.d("TmdbHeaderView", "OMDB 评分开始请求，imdbId=" + imdbId);
+        fetchOmdbRatings(imdbId, omdbApiKey, label, scroll, container);
+    }
+
+    /**
+     * 异步请求 OMDB 并渲染多来源评分。匹配不到数据时保持隐藏。
+     */
+    private void fetchOmdbRatings(String imdbId, String omdbApiKey, com.google.android.material.textview.MaterialTextView label, View scroll, ViewGroup container) {
+        com.fongmi.android.tv.utils.Task.execute(() -> {
+            try {
+                String url = "https://www.omdbapi.com/?i=" + imdbId + "&apikey=" + omdbApiKey;
+                okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+                        .build();
+                okhttp3.Request request = new okhttp3.Request.Builder().url(url).build();
+                okhttp3.Response response = client.newCall(request).execute();
+                if (!response.isSuccessful() || response.code() != 200 || response.body() == null) {
+                    android.util.Log.w("TmdbHeaderView", "OMDB 请求失败，code=" + response.code());
+                    return;
+                }
+
+                String json = response.body().string();
+                android.util.Log.d("TmdbHeaderView", "OMDB 响应: " + json.substring(0, Math.min(300, json.length())));
+                JsonObject jsonObj = new com.google.gson.JsonParser().parse(json).getAsJsonObject();
+                if (jsonObj.has("Response") && "False".equals(jsonObj.get("Response").getAsString())) {
+                    android.util.Log.w("TmdbHeaderView", "OMDB 返回 Response=False");
+                    return;
+                }
+
+                final java.util.List<String[]> chips = buildRatingChips(jsonObj);
+                android.util.Log.d("TmdbHeaderView", "OMDB 评分卡片数=" + chips.size());
+                if (chips.isEmpty()) return;
+
+                activity.runOnUiThread(() -> {
+                    if (headerRoot == null) return;
+                    container.removeAllViews();
+                    for (String[] chip : chips) {
+                        container.addView(createSourceRatingChip(chip[0], chip[1], chip[2]));
+                    }
+                    label.setVisibility(View.VISIBLE);
+                    scroll.setVisibility(View.VISIBLE);
+                });
+            } catch (Exception e) {
+                android.util.Log.w("TmdbHeaderView", "获取 OMDB 评分失败: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 从 OMDB 响应组装评分卡片数据：每项为 {平台名, 评分文本, 颜色}。
+     */
+    private java.util.List<String[]> buildRatingChips(JsonObject jsonObj) {
+        java.util.List<String[]> chips = new java.util.ArrayList<>();
+
+        // IMDb 评分（附投票数）
+        String imdbRating = optString(jsonObj, "imdbRating");
+        if (!TextUtils.isEmpty(imdbRating)) {
+            String votes = optString(jsonObj, "imdbVotes");
+            String text = TextUtils.isEmpty(votes) ? imdbRating : imdbRating + " (" + votes + ")";
+            chips.add(new String[]{"IMDb", text, "#F5C518"});
+        }
+
+        // Ratings 数组中的烂番茄、Metacritic 等来源
+        if (jsonObj.has("Ratings") && jsonObj.get("Ratings").isJsonArray()) {
+            for (com.google.gson.JsonElement el : jsonObj.getAsJsonArray("Ratings")) {
+                if (!el.isJsonObject()) continue;
+                JsonObject rating = el.getAsJsonObject();
+                String source = optString(rating, "Source");
+                String value = optString(rating, "Value");
+                if (TextUtils.isEmpty(source) || TextUtils.isEmpty(value)) continue;
+                if ("Internet Movie Database".equals(source)) continue; // 已由 imdbRating 展示
+                if ("Rotten Tomatoes".equals(source)) {
+                    chips.add(new String[]{"烂番茄", value, "#FA320A"});
+                } else if ("Metacritic".equals(source)) {
+                    chips.add(new String[]{"Metacritic", value, "#FFCC33"});
+                } else {
+                    chips.add(new String[]{source, value, "#21D07A"});
+                }
+            }
+        }
+
+        // Metascore（若 Ratings 中没有 Metacritic 则补充）
+        String metascore = optString(jsonObj, "Metascore");
+        if (!TextUtils.isEmpty(metascore) && !hasChip(chips, "Metacritic")) {
+            chips.add(new String[]{"Metascore", metascore + "/100", "#FFCC33"});
+        }
+
+        return chips;
+    }
+
+    private boolean hasChip(java.util.List<String[]> chips, String platform) {
+        for (String[] chip : chips) if (platform.equals(chip[0])) return true;
+        return false;
+    }
+
+    /**
+     * 读取 OMDB 字段，过滤空值与 "N/A"。
+     */
+    private String optString(JsonObject obj, String key) {
+        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) return "";
+        String value = obj.get(key).getAsString();
+        return (TextUtils.isEmpty(value) || "N/A".equals(value)) ? "" : value.trim();
+    }
+
+    /**
+     * 创建多来源评分卡片：平台名在上，评分在下。
+     */
+    private View createSourceRatingChip(String platform, String value, String color) {
+        androidx.appcompat.widget.LinearLayoutCompat chip = new androidx.appcompat.widget.LinearLayoutCompat(activity);
+        chip.setOrientation(androidx.appcompat.widget.LinearLayoutCompat.VERTICAL);
+        chip.setGravity(android.view.Gravity.CENTER);
+        chip.setPadding(28, 14, 28, 14);
+
+        android.graphics.drawable.GradientDrawable background = new android.graphics.drawable.GradientDrawable();
+        background.setColor(0x26FFFFFF);
+        background.setCornerRadius(10);
+        chip.setBackground(background);
+
+        com.google.android.material.textview.MaterialTextView platformView = new com.google.android.material.textview.MaterialTextView(activity);
+        platformView.setText(platform);
+        platformView.setTextColor(0xFF9AA7B4);
+        platformView.setTextSize(11);
+        chip.addView(platformView);
+
+        com.google.android.material.textview.MaterialTextView valueView = new com.google.android.material.textview.MaterialTextView(activity);
+        valueView.setText(value);
+        valueView.setTextColor(android.graphics.Color.parseColor(color));
+        valueView.setTextSize(15);
+        valueView.setTypeface(null, android.graphics.Typeface.BOLD);
+        androidx.appcompat.widget.LinearLayoutCompat.LayoutParams valueParams =
+                new androidx.appcompat.widget.LinearLayoutCompat.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        valueParams.topMargin = 4;
+        valueView.setLayoutParams(valueParams);
+        chip.addView(valueView);
+
+        androidx.appcompat.widget.LinearLayoutCompat.LayoutParams params =
+                new androidx.appcompat.widget.LinearLayoutCompat.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.setMarginEnd(12);
+        chip.setLayoutParams(params);
+        return chip;
     }
 
     /**
@@ -646,19 +835,19 @@ public class TmdbHeaderView {
             linkCount++;
         }
 
-        // IMDb 链接
+        // IMDB 链接
         if (externalIds != null && externalIds.has("imdb_id") && !externalIds.get("imdb_id").isJsonNull()) {
             String imdbId = externalIds.get("imdb_id").getAsString();
             if (!TextUtils.isEmpty(imdbId)) {
                 String imdbUrl = "https://www.imdb.com/title/" + imdbId;
-                android.util.Log.d("TmdbHeaderView", "Adding IMDb link: " + imdbId);
-                com.google.android.material.textview.MaterialTextView ratingView = addExternalLink(container, "IMDb", imdbUrl, null);
+                android.util.Log.d("TmdbHeaderView", "Adding IMDB link: " + imdbId);
+                com.google.android.material.textview.MaterialTextView ratingView = addExternalLink(container, "IMDB", imdbUrl, null);
                 // 只有配置了 OMDb API Key 才获取评分
                 com.fongmi.android.tv.bean.TmdbConfig tmdbConfig = com.fongmi.android.tv.bean.TmdbConfig.objectFrom(com.fongmi.android.tv.setting.Setting.getTmdbConfig());
                 String omdbApiKey = tmdbConfig.getOmdbApiKey();
                 android.util.Log.d("TmdbHeaderView", "OMDb API Key from config: " + (TextUtils.isEmpty(omdbApiKey) ? "empty" : omdbApiKey.substring(0, Math.min(8, omdbApiKey.length())) + "..."));
                 if (!TextUtils.isEmpty(omdbApiKey)) {
-                    android.util.Log.d("TmdbHeaderView", "Starting IMDb rating fetch for: " + imdbId);
+                    android.util.Log.d("TmdbHeaderView", "Starting IMDB rating fetch for: " + imdbId);
                     fetchImdbRating(imdbId, omdbApiKey, ratingView);
                 } else {
                     android.util.Log.d("TmdbHeaderView", "OMDb API Key not configured, skipping rating fetch");
@@ -761,7 +950,7 @@ public class TmdbHeaderView {
     }
 
     /**
-     * 异步获取 IMDb 评分（使用 OMDb API）
+     * 异步获取 IMDB 评分（使用 OMDb API）
      */
     private void fetchImdbRating(String imdbId, String omdbApiKey, com.google.android.material.textview.MaterialTextView ratingView) {
         android.util.Log.d("TmdbHeaderView", "fetchImdbRating called for: " + imdbId);
@@ -802,11 +991,11 @@ public class TmdbHeaderView {
                 if (jsonObj.has("imdbRating") && !jsonObj.get("imdbRating").isJsonNull()) {
                     String rating = jsonObj.get("imdbRating").getAsString();
                     if (!TextUtils.isEmpty(rating) && !"N/A".equals(rating)) {
-                        android.util.Log.d("TmdbHeaderView", "Parsed IMDb rating: " + rating);
+                        android.util.Log.d("TmdbHeaderView", "Parsed IMDB rating: " + rating);
                         activity.runOnUiThread(() -> {
                             ratingView.setText("★ " + rating);
                             ratingView.setVisibility(View.VISIBLE);
-                            android.util.Log.d("TmdbHeaderView", "IMDb rating displayed: " + rating);
+                            android.util.Log.d("TmdbHeaderView", "IMDB rating displayed: " + rating);
                         });
                     } else {
                         android.util.Log.w("TmdbHeaderView", "Rating is N/A or empty");
@@ -815,13 +1004,13 @@ public class TmdbHeaderView {
                     android.util.Log.w("TmdbHeaderView", "No imdbRating in response");
                 }
             } catch (Exception e) {
-                android.util.Log.e("TmdbHeaderView", "Failed to fetch IMDb rating: " + e.getMessage(), e);
+                android.util.Log.e("TmdbHeaderView", "Failed to fetch IMDB rating: " + e.getMessage(), e);
             }
         });
     }
 
     /**
-     * 从 IMDb HTML 中解析评分
+     * 从 IMDB HTML 中解析评分
      */
     private String parseImdbRating(String html) {
         if (TextUtils.isEmpty(html)) return null;

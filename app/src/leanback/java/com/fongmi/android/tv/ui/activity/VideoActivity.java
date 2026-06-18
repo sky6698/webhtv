@@ -141,7 +141,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     private Runnable mTmdbDetailTimeout;
     private boolean mTmdbDetailLoading;
     private boolean mTmdbDetailRevealed;
-    private final java.util.Map<View, Integer> mTmdbDetailVisibility = new java.util.HashMap<>();
 
     // TMDB 模式相关字段
     private com.fongmi.android.tv.ui.helper.TmdbUIAdapter mTmdbUIAdapter;
@@ -377,7 +376,8 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     protected void initView(Bundle savedInstanceState) {
         long start = System.currentTimeMillis();
         SpiderDebug.log("video-flow", "initView start sinceLaunch=%dms key=%s id=%s", getLaunchCost(start), getKey(), getId());
-        if (!isCast() && hasInitialPreview()) showInitialPreview();
+        mTmdbDetailTimeout = this::showTmdbDetailFallback;
+        initTmdbMode();
         super.initView(savedInstanceState);
         SpiderDebug.log("video-flow", "initView after playback cost=%dms", System.currentTimeMillis() - start);
         mFrameParams = mBinding.video.getLayoutParams();
@@ -392,7 +392,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         mR2 = this::updateFocus;
         mR3 = this::setTraffic;
         mR4 = this::showEmpty;
-        mTmdbDetailTimeout = this::showTmdbDetailFallback;
         SpiderDebug.log("video-flow", "initView state ready cost=%dms", System.currentTimeMillis() - start);
         checkCast();
         SpiderDebug.log("video-flow", "initView preview ready cost=%dms", System.currentTimeMillis() - start);
@@ -401,7 +400,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         setVideoView();
         SpiderDebug.log("video-flow", "initView video view ready cost=%dms", System.currentTimeMillis() - start);
         setViewModel();
-        initTmdbMode();
         checkId();
         SpiderDebug.log("video-flow", "initView end cost=%dms sinceLaunch=%dms", System.currentTimeMillis() - start, getLaunchCost(System.currentTimeMillis()));
     }
@@ -539,7 +537,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
 
     private void checkCast() {
         if (isCast() && !isFullscreen()) enterFullscreen();
-        else if (hasInitialPreview()) showInitialPreview();
         else mBinding.progressLayout.showProgress();
     }
 
@@ -605,7 +602,8 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         item.checkPic(getPic());
         item.checkName(getName());
         boolean loadTmdbDetail = shouldLoadTmdbDetail();
-        mBinding.progressLayout.showContent();
+        // 非 TMDB：立即揭开，全部内容一次性出现；TMDB：继续停在 loading，等富集完成再揭开
+        if (!loadTmdbDetail) mBinding.progressLayout.showContent();
         mBinding.name.setText(item.getName());
         mFlagAdapter.addAll(item.getFlags());
         mBinding.video.requestFocus();
@@ -635,22 +633,13 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     private void showTmdbDetailLoading() {
         mTmdbDetailLoading = true;
         mTmdbDetailRevealed = false;
-        mTmdbDetailVisibility.clear();
-        hideTmdbDetailContent(mBinding.name, mBinding.remark, mBinding.row1, mBinding.tmdbOverview, mBinding.director, mBinding.actor, mBinding.row2, mBinding.scroll);
-        mBinding.tmdbDetailLoading.animate().cancel();
-        mBinding.tmdbDetailLoading.setAlpha(1f);
-        mBinding.tmdbDetailLoading.setVisibility(View.VISIBLE);
+        // 全屏 loading：隐藏全部内容（含视频窗口），只留转圈，等 TMDB 富集完成或超时再一次性揭开
+        if (!mBinding.progressLayout.isProgress()) mBinding.progressLayout.showProgress();
+        // setText 等内容填充可能把 remark/actor 等子视图改回 VISIBLE，强制压回隐藏避免泄漏
+        mBinding.progressLayout.hideContent();
         App.removeCallbacks(mTmdbDetailTimeout);
         App.post(mTmdbDetailTimeout, TMDB_DETAIL_LOAD_TIMEOUT);
-        SpiderDebug.log("tmdb-tv", "detail loading overlay show");
-    }
-
-    private void hideTmdbDetailContent(View... views) {
-        for (View view : views) {
-            if (view == null) continue;
-            mTmdbDetailVisibility.put(view, view.getVisibility());
-            view.setVisibility(View.INVISIBLE);
-        }
+        SpiderDebug.log("tmdb-tv", "detail loading show (full-screen progress)");
     }
 
     // TMDB 数据成功返回：揭开内容（仅一次）并应用 TMDB 字段（每次都应用）
@@ -659,45 +648,21 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         applyTmdbDetailFields();
     }
 
-    // 揭开遮罩、恢复内容可见性，幂等（超时或数据到达都会调用，只执行一次）
+    // 揭开全屏 loading、一次性显示全部内容，幂等（超时或数据到达都会调用，只执行一次）
     private void revealTmdbDetail() {
         if (mTmdbDetailRevealed) return;
         mTmdbDetailRevealed = true;
         mTmdbDetailLoading = false;
         App.removeCallbacks(mTmdbDetailTimeout);
-
-        // 恢复被隐藏的内容区到原始可见性
-        for (java.util.Map.Entry<View, Integer> entry : mTmdbDetailVisibility.entrySet()) {
-            View view = entry.getKey();
-            if (view == null) continue;
-            view.setVisibility(entry.getValue());
-        }
-        mTmdbDetailVisibility.clear();
-
-        // 内容淡入
-        View scroll = mBinding.scroll;
-        if (scroll != null && scroll.getVisibility() == View.VISIBLE) {
-            scroll.setAlpha(0f);
-            scroll.animate().alpha(1f).setDuration(200).start();
-        }
-
-        // 隐藏 loading 遮罩
-        mBinding.tmdbDetailLoading.animate().cancel();
-        mBinding.tmdbDetailLoading.animate()
-                .alpha(0f)
-                .setDuration(200)
-                .withEndAction(() -> {
-                    mBinding.tmdbDetailLoading.setVisibility(View.GONE);
-                    mBinding.tmdbDetailLoading.setAlpha(1f);
-                })
-                .start();
-        SpiderDebug.log("tmdb-tv", "detail loading overlay hide");
+        mBinding.progressLayout.showContent();
+        SpiderDebug.log("tmdb-tv", "detail loading reveal (show content)");
     }
 
     private void applyTmdbDetailFields() {
-        // 去掉集数、演员；简介按钮默认隐藏（仅简介显示不全时再显示）
+        // 去掉集数、演员、导演；简介按钮默认隐藏（仅简介显示不全时再显示）
         mBinding.remark.setVisibility(View.GONE);
         mBinding.actor.setVisibility(View.GONE);
+        mBinding.director.setVisibility(View.GONE);
         mBinding.content.setVisibility(View.GONE);
 
         // 年份、地区、类型取 TMDB
@@ -757,6 +722,7 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         if (mTmdbDetailRevealed) return;
         SpiderDebug.log("tmdb-tv", "detail loading overlay timeout fallback");
         revealTmdbDetail();
+        finishEpisodeLoading();
     }
 
     private void setText(Vod item) {
@@ -905,6 +871,17 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         mBinding.episode.post(() -> {
             if (mEpisodeAdapter != null) mEpisodeAdapter.notifyDataSetChanged();
         });
+    }
+
+    // TMDB 加载结束后兜底：若仍卡在剧集加载指示器（电影无集数、未匹配到、获取失败等），
+    // 隐藏指示器并以普通文本模式揭开选集列表，避免「正在加载剧集信息...」永久停留
+    private void finishEpisodeLoading() {
+        if (mBinding.episodeLoadingIndicator.getVisibility() != View.VISIBLE) return;
+        mBinding.episodeLoadingIndicator.setVisibility(View.GONE);
+        mBinding.episode.setVisibility(View.VISIBLE);
+        mBinding.episode.setAlpha(1f);
+        if (mEpisodeAdapter != null) mEpisodeAdapter.notifyDataSetChanged();
+        SpiderDebug.log("tmdb-tv", "episode loading finished without tmdb episodes, reveal plain list");
     }
 
     private void seamless(Flag flag) {
@@ -1585,18 +1562,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         setPartAdapter();
     }
 
-    private boolean hasInitialPreview() {
-        return !getName().isEmpty() || !getPic().isEmpty() || !getWallPic().isEmpty();
-    }
-
-    private void showInitialPreview() {
-        mBinding.progressLayout.showContent();
-        mBinding.name.setText(getName());
-        if (!getPic().isEmpty()) setArtwork(getPic());
-        else if (!getWallPic().isEmpty()) setContextWall(getWallPic());
-        mBinding.video.requestFocus();
-    }
-
     private History createHistory(Vod item) {
         History history = new History();
         history.setKey(getHistoryKey());
@@ -1855,6 +1820,8 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
             bindTmdbData();
             // 未匹配到 TMDB 数据：直接揭开原版 UI
             if (mTmdbUIAdapter == null || !mTmdbUIAdapter.isLoaded()) revealTmdbDetail();
+            // TMDB 加载已结束：若仍卡在剧集加载指示器（电影无集数、未匹配、获取失败等），揭开原版选集列表
+            finishEpisodeLoading();
         }
         else if (event.getType() == RefreshEvent.Type.SUBTITLE) player().setSub(Sub.from(event.getPath()));
         else if (event.getType() == RefreshEvent.Type.DANMAKU) player().setDanmaku(Danmaku.from(event.getPath()));

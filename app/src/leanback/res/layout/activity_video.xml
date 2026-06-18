@@ -517,37 +517,4 @@
 
     </androidx.core.widget.NestedScrollView>
 
-    <!-- TMDB详情加载遮罩：盖住原版详情页，避免先显示原始UI再切换到TMDB UI -->
-    <FrameLayout
-        android:id="@+id/tmdbDetailLoading"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@android:color/transparent"
-        android:clickable="true"
-        android:focusable="true"
-        android:visibility="gone">
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:gravity="center"
-            android:orientation="vertical">
-
-            <ProgressBar
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:indeterminateTint="@color/white" />
-
-            <com.google.android.material.textview.MaterialTextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/tmdb_loading_detail"
-                android:textColor="@color/white"
-                android:textSize="16sp" />
-
-        </LinearLayout>
-
-    </FrameLayout>
 </com.fongmi.android.tv.ui.custom.ProgressLayout>
