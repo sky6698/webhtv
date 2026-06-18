@@ -147,12 +147,15 @@
     <string name="repo_cnb">CNB 仓库</string>
     <string name="setting_debug_log">调试日志</string>
     <string name="setting_manage_page">管理页面</string>
+    <string name="setting_git_cloud">Git 云盘</string>
+    <string name="git_cloud_account_count">账号 %1$d</string>
     <string name="setting_login_state">登录态学习</string>
     <string name="setting_site_health_sort">站点健康排序</string>
     <string name="setting_site_health_enable">启用站点健康排序</string>
     <string name="setting_site_health_dialog_sort">站点弹窗排序</string>
     <string name="site_health_clear_done">站点健康记录已清空</string>
     <string name="setting_web_home_extension">WebHome 扩展</string>
+    <string name="setting_csp_warmup">CSP init 预热</string>
     <string name="setting_playback_artwork_wall">播放界面剧照</string>
     <string name="setting_viewing_record_sync">观影记录同步</string>
     <string name="viewing_record_sync_entry_summary">%1$s · 远端 %2$d/%3$d · Webhook %4$d/%5$d</string>
