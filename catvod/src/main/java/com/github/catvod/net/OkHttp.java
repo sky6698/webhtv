@@ -133,6 +133,15 @@ public class OkHttp {
         }
     }
 
+    public static String string(String url, long timeout) {
+        if (!url.startsWith("http")) return "";
+        try (Response res = newCall(client(timeout), url).execute()) {
+            return res.body().string();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     public static String string(String url, Map<String, String> headers) {
         if (!url.startsWith("http")) return "";
         try (Response res = newCall(url, headers).execute()) {
