@@ -29,7 +29,6 @@ public class SettingPlayerActivity extends BaseActivity implements UaListener, B
     private ActivitySettingPlayerBinding mBinding;
     private DecimalFormat format;
     private String[] caption;
-    private String[] player;
     private String[] kernel;
     private String[] render;
     private String[] scale;
@@ -52,7 +51,7 @@ public class SettingPlayerActivity extends BaseActivity implements UaListener, B
     protected void initView(Bundle savedInstanceState) {
         setVisible();
         format = new DecimalFormat("0.#");
-        mBinding.player.requestFocus();
+        mBinding.render.requestFocus();
         mBinding.uaText.setText(Setting.getUa());
         mBinding.aacText.setText(getSwitch(PlayerSetting.isPreferAAC()));
         mBinding.tunnelText.setText(getSwitch(PlayerSetting.isTunnel()));
@@ -64,7 +63,6 @@ public class SettingPlayerActivity extends BaseActivity implements UaListener, B
         mBinding.audioBookNotificationText.setText(getSwitch(PlayerSetting.isAudioBookNotification()));
         mBinding.audioDecodeText.setText(getSwitch(PlayerSetting.isAudioPrefer()));
         mBinding.videoDecodeText.setText(getSwitch(PlayerSetting.isVideoPrefer()));
-        mBinding.playerText.setText((player = ResUtil.getStringArray(R.array.select_player))[PlayerSetting.getPlayer()]);
         mBinding.osdText.setText(getOsdText(osd = ResUtil.getStringArray(R.array.select_player_osd)));
         mBinding.kernelText.setText((kernel = ResUtil.getStringArray(R.array.select_player_kernel))[PlayerSetting.getPlayer()]);
         mBinding.scaleText.setText((scale = ResUtil.getStringArray(R.array.select_scale))[PlayerSetting.getScale()]);
@@ -75,7 +73,6 @@ public class SettingPlayerActivity extends BaseActivity implements UaListener, B
     @Override
     protected void initEvent() {
         mBinding.ua.setOnClickListener(this::onUa);
-        mBinding.player.setOnClickListener(this::setPlayer);
         mBinding.aac.setOnClickListener(this::setAAC);
         mBinding.kernel.setOnClickListener(this::setKernel);
         mBinding.scale.setOnClickListener(this::setScale);
@@ -114,16 +111,8 @@ public class SettingPlayerActivity extends BaseActivity implements UaListener, B
         mBinding.aacText.setText(getSwitch(PlayerSetting.isPreferAAC()));
     }
 
-    private void setPlayer(View view) {
-        int index = (PlayerSetting.getPlayer() + 1) % player.length;
-        mBinding.playerText.setText(player[index]);
-        mBinding.kernelText.setText(kernel[index]);
-        PlayerSetting.putPlayer(index);
-    }
-
     private void setKernel(View view) {
         int index = PlayerSetting.getPlayer() == PlayerSetting.EXO ? PlayerSetting.IJK : PlayerSetting.EXO;
-        mBinding.playerText.setText(player[index]);
         mBinding.kernelText.setText(kernel[index]);
         PlayerSetting.putPlayer(index);
     }

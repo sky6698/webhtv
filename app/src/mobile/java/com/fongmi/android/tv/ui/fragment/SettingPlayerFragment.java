@@ -32,7 +32,6 @@ public class SettingPlayerFragment extends BaseFragment implements UaListener, B
     private DecimalFormat format;
     private String[] background;
     private String[] caption;
-    private String[] player;
     private String[] kernel;
     private String[] render;
     private String[] scale;
@@ -65,7 +64,6 @@ public class SettingPlayerFragment extends BaseFragment implements UaListener, B
         mBinding.audioDecodeText.setText(getSwitch(PlayerSetting.isAudioPrefer()));
         mBinding.videoDecodeText.setText(getSwitch(PlayerSetting.isVideoPrefer()));
         mBinding.caption.setVisibility(PlayerSetting.hasCaption() ? View.VISIBLE : View.GONE);
-        mBinding.playerText.setText((player = ResUtil.getStringArray(R.array.select_player))[PlayerSetting.getPlayer()]);
         mBinding.osdText.setText(getOsdText(osd = ResUtil.getStringArray(R.array.select_player_osd)));
         mBinding.kernelText.setText((kernel = ResUtil.getStringArray(R.array.select_player_kernel))[PlayerSetting.getPlayer()]);
         mBinding.scaleText.setText((scale = ResUtil.getStringArray(R.array.select_scale))[PlayerSetting.getScale()]);
@@ -77,7 +75,6 @@ public class SettingPlayerFragment extends BaseFragment implements UaListener, B
     @Override
     protected void initEvent() {
         mBinding.ua.setOnClickListener(this::onUa);
-        mBinding.player.setOnClickListener(this::onPlayer);
         mBinding.aac.setOnClickListener(this::setAAC);
         mBinding.kernel.setOnClickListener(this::onKernel);
         mBinding.scale.setOnClickListener(this::onScale);
@@ -111,18 +108,8 @@ public class SettingPlayerFragment extends BaseFragment implements UaListener, B
         mBinding.aacText.setText(getSwitch(PlayerSetting.isPreferAAC()));
     }
 
-    private void onPlayer(View view) {
-        new MaterialAlertDialogBuilder(requireActivity()).setTitle(R.string.player_default).setNegativeButton(R.string.dialog_negative, null).setSingleChoiceItems(player, PlayerSetting.getPlayer(), (dialog, which) -> {
-            mBinding.playerText.setText(player[which]);
-            mBinding.kernelText.setText(kernel[which]);
-            PlayerSetting.putPlayer(which);
-            dialog.dismiss();
-        }).show();
-    }
-
     private void onKernel(View view) {
         new MaterialAlertDialogBuilder(requireActivity()).setTitle(R.string.player_kernel).setNegativeButton(R.string.dialog_negative, null).setSingleChoiceItems(kernel, PlayerSetting.getPlayer(), (dialog, which) -> {
-            mBinding.playerText.setText(player[which]);
             mBinding.kernelText.setText(kernel[which]);
             PlayerSetting.putPlayer(which);
             dialog.dismiss();
