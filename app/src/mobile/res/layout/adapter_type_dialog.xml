@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.textview.MaterialTextView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/text"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_margin="6dp"
+    android:background="@drawable/shape_type_dialog_item"
+    android:gravity="center"
+    android:maxWidth="280dp"
+    android:minHeight="44dp"
+    android:textColor="@color/selector_dialog_type"
+    android:textSize="15sp"
+    tools:text="推荐" />
