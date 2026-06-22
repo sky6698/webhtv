@@ -58,6 +58,7 @@ public class TmdbMatchCache {
         private double rating;
         private String originalLanguage;
         private String originCountry;
+        private String department;
 
         public static Entry from(TmdbItem item) {
             Entry entry = new Entry();
@@ -72,11 +73,12 @@ public class TmdbMatchCache {
             entry.rating = item.getRating();
             entry.originalLanguage = item.getOriginalLanguage();
             entry.originCountry = item.getOriginCountry();
+            entry.department = item.getDepartment();
             return entry;
         }
 
         public TmdbItem toItem() {
-            return new TmdbItem(tmdbId, mediaType, title, subtitle, overview, posterUrl, backdropUrl, credit, rating, originalLanguage, originCountry);
+            return new TmdbItem(tmdbId, mediaType, title, subtitle, overview, posterUrl, backdropUrl, credit, rating, originalLanguage, originCountry, null, department);
         }
     }
 }

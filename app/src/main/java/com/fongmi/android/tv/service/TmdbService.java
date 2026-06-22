@@ -712,7 +712,8 @@ public class TmdbService {
             String language = string(object, "original_language");
             String country = firstString(array(object, "origin_country"));
             List<Integer> genreIds = integers(array(object, "genre_ids"));
-            items.add(new TmdbItem(object.get("id").getAsInt(), mediaType, title, subtitle, string(object, "overview"), image(config.getImageBase(), posterPath), image(config.getBackdropBase(), backdropPath), credit, voteValue, language, country, genreIds));
+            String department = string(object, "department");
+            items.add(new TmdbItem(object.get("id").getAsInt(), mediaType, title, subtitle, string(object, "overview"), image(config.getImageBase(), posterPath), image(config.getBackdropBase(), backdropPath), credit, voteValue, language, country, genreIds, department));
         }
         return items;
     }

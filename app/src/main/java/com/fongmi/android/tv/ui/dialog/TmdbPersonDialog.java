@@ -31,6 +31,7 @@ import com.fongmi.android.tv.ui.activity.VideoActivity;
 import com.fongmi.android.tv.ui.adapter.TmdbPersonPhotoAdapter;
 import com.fongmi.android.tv.ui.adapter.TmdbPersonWorkAdapter;
 import com.fongmi.android.tv.ui.helper.TmdbNavigation;
+import com.fongmi.android.tv.ui.helper.TmdbPersonWorkFilters;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.Task;
 import com.fongmi.android.tv.utils.TmdbImageSaver;
@@ -40,10 +41,8 @@ import com.google.android.material.chip.ChipGroup;
 import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
 /**
  * TMDB 人物详情全屏弹窗。
@@ -64,14 +63,15 @@ public class TmdbPersonDialog {
     private LinearLayout filterSection;
     private RecyclerView photosRecycler;
     private RecyclerView worksRecycler;
-    private ChipGroup filterChips;
+    private ChipGroup departmentChips;
+    private ChipGroup mediaChips;
 
     private TmdbPersonPhotoAdapter photoAdapter;
     private TmdbPersonWorkAdapter workAdapter;
 
-    private List<TmdbItem> allWorks = new ArrayList<>();
-    private Map<String, List<TmdbItem>> worksByCategory = new HashMap<>();
-    private String currentFilter = "all";
+    private TmdbPersonWorkFilters workFilters = TmdbPersonWorkFilters.from(null, null);
+    private String currentDepartmentFilter = TmdbPersonWorkFilters.ALL;
+    private String currentMediaFilter = TmdbPersonWorkFilters.ALL;
     private List<String> personPhotos = new ArrayList<>();
 
     // 懒加载相关
@@ -139,7 +139,8 @@ public class TmdbPersonDialog {
         filterSection = view.findViewById(R.id.filterSection);
         photosRecycler = view.findViewById(R.id.photosRecycler);
         worksRecycler = view.findViewById(R.id.worksRecycler);
-        filterChips = view.findViewById(R.id.filterChips);
+        departmentChips = view.findViewById(R.id.departmentChips);
+        mediaChips = view.findViewById(R.id.mediaChips);
         View closeBtn = view.findViewById(R.id.closeBtn);
 
         name.setText(person.getName());
@@ -227,45 +228,21 @@ public class TmdbPersonDialog {
     private void setWorks(List<TmdbItem> castWorks, List<TmdbItem> crewWorks) {
         if ((castWorks == null || castWorks.isEmpty()) && (crewWorks == null || crewWorks.isEmpty())) return;
 
-        allWorks.clear();
-        worksByCategory.clear();
-
-        // 分类：全部、演员、电影、剧集
-        List<TmdbItem> all = new ArrayList<>();
-        List<TmdbItem> cast = new ArrayList<>();
-        List<TmdbItem> movies = new ArrayList<>();
-        List<TmdbItem> tvs = new ArrayList<>();
-
-        if (castWorks != null) {
-            all.addAll(castWorks);
-            cast.addAll(castWorks);
-            for (TmdbItem item : castWorks) {
-                if (item.isTv()) tvs.add(item);
-                else movies.add(item);
-            }
-        }
-
-        if (crewWorks != null) {
-            all.addAll(crewWorks);
-        }
-
-        allWorks = all;
-        worksByCategory.put("all", all);
-        worksByCategory.put("cast", cast);
-        worksByCategory.put("movies", movies);
-        worksByCategory.put("tvs", tvs);
+        workFilters = TmdbPersonWorkFilters.from(castWorks, crewWorks);
+        currentDepartmentFilter = TmdbPersonWorkFilters.ALL;
+        currentMediaFilter = TmdbPersonWorkFilters.ALL;
 
         // 计算统计信息
         double totalRating = 0;
         int ratedCount = 0;
-        for (TmdbItem item : cast) {
+        for (TmdbItem item : workFilters.filter(TmdbPersonWorkFilters.ALL, TmdbPersonWorkFilters.ALL)) {
             if (item.getRating() > 0) {
                 totalRating += item.getRating();
                 ratedCount++;
             }
         }
         final double avgRating = ratedCount > 0 ? totalRating / ratedCount : 0;
-        final int workCount = cast.size();
+        final int workCount = workFilters.allCount();
 
         activity.runOnUiThread(() -> {
             if (dialog == null || !dialog.isShowing()) return;
@@ -273,7 +250,7 @@ public class TmdbPersonDialog {
             // 显示统计
             if (workCount > 0) {
                 String statsText = String.format(Locale.getDefault(),
-                    "参演 %d 部作品" + (avgRating > 0 ? " · 平均 %.1f 分" : ""),
+                    "参与 %d 部作品" + (avgRating > 0 ? " · 平均 %.1f 分" : ""),
                     workCount, avgRating);
                 stats.setText(statsText);
                 stats.setVisibility(View.VISIBLE);
@@ -283,7 +260,7 @@ public class TmdbPersonDialog {
             setupFilters();
 
             // 显示作品
-            filterWorks(currentFilter);
+            filterWorks();
         });
     }
 
@@ -291,22 +268,28 @@ public class TmdbPersonDialog {
      * 设置筛选标签。
      */
     private void setupFilters() {
-        filterChips.removeAllViews();
+        departmentChips.removeAllViews();
+        mediaChips.removeAllViews();
+        addFilterChips(departmentChips, workFilters.departmentOptions(), currentDepartmentFilter, key -> {
+            currentDepartmentFilter = key;
+            filterWorks();
+        });
+        addFilterChips(mediaChips, workFilters.mediaOptions(), currentMediaFilter, key -> {
+            currentMediaFilter = key;
+            filterWorks();
+        });
 
-        String[] filters = {"all", "cast", "movies", "tvs"};
-        String[] labels = {"全部", "演员", "电影", "剧集"};
+        filterSection.setVisibility(View.VISIBLE);
+    }
 
-        for (int i = 0; i < filters.length; i++) {
-            String filter = filters[i];
-            String label = labels[i];
-            List<TmdbItem> items = worksByCategory.get(filter);
-            if (items == null || items.isEmpty()) continue;
-
+    private void addFilterChips(ChipGroup group, List<TmdbPersonWorkFilters.Option> options, String current, FilterCallback callback) {
+        for (TmdbPersonWorkFilters.Option option : options) {
             Chip chip = new Chip(activity);
-            chip.setText(String.format("%s (%d)", label, items.size()));
+            chip.setId(View.generateViewId());
+            chip.setText(String.format(Locale.getDefault(), "%s (%d)", option.label(), option.count()));
             chip.setCheckable(true);
-            chip.setChecked(filter.equals(currentFilter));
-            chip.setOnClickListener(v -> filterWorks(filter));
+            chip.setChecked(option.key().equals(current));
+            chip.setOnClickListener(v -> callback.onFilter(option.key()));
             if (Util.isLeanback()) {
                 chip.setFocusable(true);
                 chip.setOnFocusChangeListener((v, hasFocus) -> {
@@ -318,26 +301,21 @@ public class TmdbPersonDialog {
                 chip.setChipStrokeColorResource(R.color.white);
                 chip.setChipStrokeWidth(2f);
             }
-            filterChips.addView(chip);
+            group.addView(chip);
         }
-
-        filterSection.setVisibility(View.VISIBLE);
     }
 
     /**
      * 根据筛选条件显示作品（分批懒加载）。
      */
-    private void filterWorks(String filter) {
-        currentFilter = filter;
-        List<TmdbItem> items = worksByCategory.get(filter);
-        if (items != null) {
-            isLoadingMore = false;
-            int initialCount = Math.min(PAGE_SIZE_INITIAL, items.size());
-            workAdapter.setItems(items.subList(0, initialCount));
-            worksRecycler.scrollToPosition(0);
-            worksRecycler.setVisibility(View.VISIBLE);
-            requestInitialFocus();
-        }
+    private void filterWorks() {
+        List<TmdbItem> items = workFilters.filter(currentDepartmentFilter, currentMediaFilter);
+        isLoadingMore = false;
+        int initialCount = Math.min(PAGE_SIZE_INITIAL, items.size());
+        workAdapter.setItems(items.subList(0, initialCount));
+        worksRecycler.scrollToPosition(0);
+        worksRecycler.setVisibility(items.isEmpty() ? View.GONE : View.VISIBLE);
+        requestInitialFocus();
     }
 
     private void requestInitialFocus() {
@@ -364,8 +342,7 @@ public class TmdbPersonDialog {
      */
     private void loadMoreWorks() {
         if (isLoadingMore) return;
-        List<TmdbItem> items = worksByCategory.get(currentFilter);
-        if (items == null) return;
+        List<TmdbItem> items = workFilters.filter(currentDepartmentFilter, currentMediaFilter);
         int loaded = workAdapter.getLoadedCount();
         if (loaded >= items.size()) return;
         isLoadingMore = true;
@@ -473,5 +450,9 @@ public class TmdbPersonDialog {
         if (!result.equals(url)) return result;
         // 兜底：匹配通用 /wXXX/ 模式
         return url.replaceFirst("/w\\d+/", "/original/");
+    }
+
+    private interface FilterCallback {
+        void onFilter(String key);
     }
 }

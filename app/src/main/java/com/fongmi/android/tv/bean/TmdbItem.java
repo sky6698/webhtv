@@ -20,6 +20,7 @@ public class TmdbItem implements Serializable {
     private final String originalLanguage;
     private final String originCountry;
     private final List<Integer> genreIds;
+    private final String department;
 
     public TmdbItem(int tmdbId, String mediaType, String title, String subtitle, String overview, String posterUrl, String backdropUrl) {
         this(tmdbId, mediaType, title, subtitle, overview, posterUrl, backdropUrl, "", 0.0);
@@ -38,6 +39,10 @@ public class TmdbItem implements Serializable {
     }
 
     public TmdbItem(int tmdbId, String mediaType, String title, String subtitle, String overview, String posterUrl, String backdropUrl, String credit, double rating, String originalLanguage, String originCountry, List<Integer> genreIds) {
+        this(tmdbId, mediaType, title, subtitle, overview, posterUrl, backdropUrl, credit, rating, originalLanguage, originCountry, genreIds, "");
+    }
+
+    public TmdbItem(int tmdbId, String mediaType, String title, String subtitle, String overview, String posterUrl, String backdropUrl, String credit, double rating, String originalLanguage, String originCountry, List<Integer> genreIds, String department) {
         this.tmdbId = tmdbId;
         this.mediaType = mediaType;
         this.title = title;
@@ -50,6 +55,7 @@ public class TmdbItem implements Serializable {
         this.originalLanguage = originalLanguage;
         this.originCountry = originCountry;
         this.genreIds = genreIds == null ? new ArrayList<>() : new ArrayList<>(genreIds);
+        this.department = department;
     }
 
     public int getTmdbId() {
@@ -98,6 +104,10 @@ public class TmdbItem implements Serializable {
 
     public List<Integer> getGenreIds() {
         return new ArrayList<>(genreIds);
+    }
+
+    public String getDepartment() {
+        return isEmpty(department) ? "" : department;
     }
 
     public boolean isTv() {
