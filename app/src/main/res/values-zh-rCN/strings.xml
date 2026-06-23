@@ -851,8 +851,8 @@
     <string name="error_play_flag">暂无线路数据</string>
     <string name="error_play_timeout">连接超时</string>
     <string name="error_play_fallback">%1$s 播放失败，已切换到 %2$s</string>
-    <string name="error_play_ijk_unavailable">32 位 IJK 内核在当前包名下不可用</string>
-    <string name="error_play_ijk_unavailable_switch">32 位 IJK 内核在当前包名下不可用，已切换到 %1$s</string>
+    <string name="error_play_ijk_unavailable">当前设备不可用 IJK 内核</string>
+    <string name="error_play_ijk_unavailable_switch">当前设备不可用 IJK 内核，已切换到 %1$s</string>
     <string name="error_play_tvbus">错误代码：<xliff:g name="name">%s</xliff:g></string>
     <string name="error_detail">暂无播放数据</string>
     <string name="error_empty">这里什麽都没有 👀</string>

@@ -861,8 +861,8 @@
     <string name="error_play_flag">No flag data</string>
     <string name="error_play_timeout">Timed out</string>
     <string name="error_play_fallback">%1$s playback failed, switched to %2$s</string>
-    <string name="error_play_ijk_unavailable">32-bit IJK is unavailable for this package</string>
-    <string name="error_play_ijk_unavailable_switch">32-bit IJK is unavailable for this package, switched to %1$s</string>
+    <string name="error_play_ijk_unavailable">IJK is unavailable on this device</string>
+    <string name="error_play_ijk_unavailable_switch">IJK is unavailable on this device, switched to %1$s</string>
     <string name="error_play_tvbus">Error code: <xliff:g name="name">%s</xliff:g></string>
     <string name="error_detail">No play data</string>
     <string name="error_empty">Nothing here 👀</string>

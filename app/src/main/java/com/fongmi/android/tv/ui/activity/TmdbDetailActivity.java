@@ -3148,7 +3148,7 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         player().clear();
         inlineStartPosition = getInlineResumePosition();
         inlineStartPositionApplied = false;
-        player().switchPlayer(history == null ? PlayerSetting.getPlayer() : history.getPlayerOrDefault());
+        player().switchPlayer(PlayerSetting.getPlayer());
         updateInlineHistoryPlayer();
         setInlineSpeed(history == null ? NORMAL_SPEED : history.getSpeed());
         updateInlineButtons(false);

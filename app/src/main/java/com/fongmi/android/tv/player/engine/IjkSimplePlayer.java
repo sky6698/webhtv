@@ -324,7 +324,7 @@ class IjkSimplePlayer extends SimpleBasePlayer implements IMediaPlayer.Listener 
             startStateRefresh();
         } catch (Throwable e) {
             playerError = new PlaybackException(e.getMessage(), e, PlaybackException.ERROR_CODE_IO_UNSPECIFIED);
-            SpiderDebug.log("ijk", "open failed uri=%s error=%s", summarizeUri(), e.getMessage());
+            SpiderDebug.log("ijk", "open failed uri=%s error=%s", summarizeUri(), e.toString());
             playbackState = Player.STATE_IDLE;
             loading = false;
             stopStateRefresh();
