@@ -4,7 +4,6 @@ import android.content.Intent;
 import android.provider.Settings;
 
 import com.fongmi.android.tv.App;
-import com.fongmi.android.tv.BuildConfig;
 import com.github.catvod.utils.Prefers;
 
 public class PlayerSetting {
@@ -13,8 +12,6 @@ public class PlayerSetting {
     public static final int IJK = 1;
     public static final int SYSTEM = 2;
     public static final int NONE = -1;
-    private static final String ABI_ARM64_V8A = "arm64_v8a";
-    private static final String IJK_NATIVE_PACKAGE = "com.fongmi.android.tv";
 
     public static int getPlayer() {
         int player = Prefers.getInt("player", EXO);
@@ -44,7 +41,7 @@ public class PlayerSetting {
     }
 
     public static boolean isIjkAvailable() {
-        return IJK_NATIVE_PACKAGE.equals(BuildConfig.APPLICATION_ID) || ABI_ARM64_V8A.equals(BuildConfig.FLAVOR_abi);
+        return true;
     }
 
     public static int getRender() {
