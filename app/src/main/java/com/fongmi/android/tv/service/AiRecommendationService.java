@@ -169,13 +169,12 @@ public class AiRecommendationService {
 
     static String fingerprint(String currentTitle, String historyFingerprint, String searchRecords, AiConfig config) {
         AiConfig safe = config == null ? new AiConfig().sanitize() : config.sanitize();
-        String value = "v2|"
+        String value = "v3|"
                 + Objects.toString(safe.getProtocol(), "") + "|"
                 + Objects.toString(safe.getEndpoint(), "") + "|"
                 + Objects.toString(safe.getModel(), "") + "|"
                 + Objects.toString(safe.getCustomUserAgent(), "") + "|"
                 + Objects.toString(safe.getRecommendPrompt(), "") + "|"
-                + PersonalRecommendationService.normalizeTitle(currentTitle) + "|"
                 + Objects.toString(historyFingerprint, "") + "|"
                 + normalizeSearchRecords(searchRecords);
         return md5(value);

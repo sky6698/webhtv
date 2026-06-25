@@ -49,6 +49,7 @@ public class PersonalRecommendationService {
     private static final int DOUBAN_SEED_BATCH = 8;
     private static final int MAX_DOUBAN_LOOKUPS_PER_SEED = 1;
     private static final int DOUBAN_RELATED_COUNT = 10;
+    private static final int AI_HISTORY_CONTEXT_LIMIT = 12;
     private static final int MAX_TMDB_SEED_CACHE = 128;
     private static final long DAY = TimeUnit.DAYS.toMillis(1);
     private static final long DOUBAN_CACHE_TTL = DAY * 7;
@@ -183,26 +184,30 @@ public class PersonalRecommendationService {
 
     public RecommendationPage loadAiPage(@Nullable Vod currentVod, @Nullable TmdbItem currentItem, int pageSize) {
         String currentTitle = currentTitle(currentVod, currentItem);
-        return new AiRecommendationService(tmdbService, tmdbConfig).load(currentVod, currentTitle, historyFingerprint(currentVod, false), pageSize);
+        return new AiRecommendationService(tmdbService, tmdbConfig).load(currentVod, currentTitle, aiHistoryFingerprint(), pageSize);
     }
 
     public AiRecommendationService.CachedPage loadCachedAiPage(@Nullable Vod currentVod, @Nullable TmdbItem currentItem, int pageSize) {
         String currentTitle = currentTitle(currentVod, currentItem);
-        return new AiRecommendationService(tmdbService, tmdbConfig).loadCached(currentTitle, historyFingerprint(currentVod, false), pageSize);
+        return new AiRecommendationService(tmdbService, tmdbConfig).loadCached(currentTitle, aiHistoryFingerprint(), pageSize);
     }
 
     public RecommendationPage resolveCachedAiPage(@Nullable Vod currentVod, @Nullable TmdbItem currentItem, int pageSize) {
         String currentTitle = currentTitle(currentVod, currentItem);
-        return new AiRecommendationService(tmdbService, tmdbConfig).resolveCached(currentTitle, historyFingerprint(currentVod, false), pageSize);
+        return new AiRecommendationService(tmdbService, tmdbConfig).resolveCached(currentTitle, aiHistoryFingerprint(), pageSize);
     }
 
     public RecommendationPage refreshAiPage(@Nullable Vod currentVod, @Nullable TmdbItem currentItem, int pageSize) {
         String currentTitle = currentTitle(currentVod, currentItem);
-        return new AiRecommendationService(tmdbService, tmdbConfig).refresh(currentVod, currentTitle, historyFingerprint(currentVod, false), pageSize);
+        return new AiRecommendationService(tmdbService, tmdbConfig).refresh(currentVod, currentTitle, aiHistoryFingerprint(), pageSize);
     }
 
     public String aiFingerprint(@Nullable Vod currentVod, @Nullable TmdbItem currentItem) {
-        return AiRecommendationService.fingerprint(currentTitle(currentVod, currentItem), historyFingerprint(currentVod, false), Setting.getKeyword(), AiConfig.objectFrom(Setting.getAiConfig()));
+        return AiRecommendationService.fingerprint(currentTitle(currentVod, currentItem), aiHistoryFingerprint(), Setting.getKeyword(), AiConfig.objectFrom(Setting.getAiConfig()));
+    }
+
+    private String aiHistoryFingerprint() {
+        return historySeedFingerprint(historySeeds("", AI_HISTORY_CONTEXT_LIMIT, false));
     }
 
     public String historyFingerprint(@Nullable Vod currentVod, boolean tmdbTarget) {

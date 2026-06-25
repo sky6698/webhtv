@@ -169,9 +169,11 @@ public class AiRecommendationServiceTest {
         AiConfig second = AiConfig.objectFrom("{\"enabled\":true,\"endpoint\":\"https://api.openai.com/v1/responses\",\"apiKey\":\"sk-test\",\"model\":\"gpt-4.1-mini\",\"recommendPrompt\":\"p2\"}");
 
         String base = AiRecommendationService.fingerprint("A", "h1", "[\"x\"]", first);
+        String changedTitle = AiRecommendationService.fingerprint("B", "h1", "[\"x\"]", first);
         String changedSearch = AiRecommendationService.fingerprint("A", "h1", "[\"x\",\"y\"]", first);
         String changedPrompt = AiRecommendationService.fingerprint("A", "h1", "[\"x\"]", second);
 
+        assertEquals(base, changedTitle);
         assertFalse(base.equals(changedSearch));
         assertFalse(base.equals(changedPrompt));
     }

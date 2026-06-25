@@ -3133,6 +3133,8 @@ public class VideoActivity extends PlaybackActivity implements Clock.Callback, C
         return new View[]{
                 mBinding.flagTitleBar,
                 mBinding.flag,
+                mBinding.qualityText,
+                mBinding.quality,
                 mBinding.episodeTitleBar,
                 mBinding.episode,
         };

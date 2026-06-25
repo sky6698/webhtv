@@ -6,6 +6,7 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -28,6 +29,8 @@ public class VideoActivityLayoutTest {
     private static final List<String> REQUIRED_TMDB_MOVABLE_IDS = Arrays.asList(
             "flagTitleBar",
             "flag",
+            "quality_text",
+            "quality",
             "episodeTitleBar",
             "episode"
     );
@@ -97,10 +100,39 @@ public class VideoActivityLayoutTest {
         }
     }
 
+    @Test
+    public void mobileVideoTmdbMovableViewsKeepQualityBetweenFlagsAndEpisodes() throws Exception {
+        Path sourcePath = findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "VideoActivity.java"));
+        String source = new String(Files.readAllBytes(sourcePath), StandardCharsets.UTF_8);
+        int method = source.indexOf("private View[] getTmdbMovableViews()");
+        int flag = source.indexOf("mBinding.flag,", method);
+        int qualityText = source.indexOf("mBinding.qualityText,", method);
+        int quality = source.indexOf("mBinding.quality,", method);
+        int episodeTitle = source.indexOf("mBinding.episodeTitleBar,", method);
+        int episode = source.indexOf("mBinding.episode,", method);
+
+        assertTrue(sourcePath + " is missing getTmdbMovableViews", method >= 0);
+        assertTrue("TMDB movable views must include flag", flag > method);
+        assertTrue("TMDB movable views must include quality title", qualityText > method);
+        assertTrue("TMDB movable views must include quality list", quality > method);
+        assertTrue("TMDB movable views must include episode title", episodeTitle > method);
+        assertTrue("TMDB movable views must include episode list", episode > method);
+        assertTrue("quality title must move after flag list", flag < qualityText);
+        assertTrue("quality list must move after quality title", qualityText < quality);
+        assertTrue("episode title must move after quality list", quality < episodeTitle);
+        assertTrue("episode list must move after episode title", episodeTitle < episode);
+    }
+
     private static Path findMobileResPath() {
         Path moduleRelative = Path.of("src", "mobile", "res");
         if (Files.exists(moduleRelative)) return moduleRelative;
         return Path.of("app", "src", "mobile", "res");
+    }
+
+    private static Path findMobileJavaPath() {
+        Path moduleRelative = Path.of("src", "mobile", "java");
+        if (Files.exists(moduleRelative)) return moduleRelative;
+        return Path.of("app", "src", "mobile", "java");
     }
 
     private static Set<String> collectAndroidIds(File file) throws Exception {
