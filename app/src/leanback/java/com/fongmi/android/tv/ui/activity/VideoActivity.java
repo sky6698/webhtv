@@ -206,6 +206,18 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     private String playHealthKey;
     private long detailStartTime;
     private long playerStartTime;
+    private boolean pendingLutImport;
+
+    private final ActivityResultLauncher<Intent> mLutDir = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
+        LutStore.setUserDir(result.getData().getData(), result.getData().getFlags());
+        Notify.show(R.string.lut_directory_selected);
+        mBinding.lutQuick.refreshList();
+        if (pendingLutImport) {
+            pendingLutImport = false;
+            chooseLutFile();
+        }
+    });
 
     private final ActivityResultLauncher<Intent> mLutFile = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
         if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
@@ -726,7 +738,9 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
 
     private void setScale(int scale) {
         if (mHistory != null) mHistory.setScale(scale);
+        if (SiteApi.PUSH.equals(getKey())) PlayerSetting.putScale(scale);
         applyResizeMode(scale);
+        mBinding.exo.post(() -> applyResizeMode(scale));
         mBinding.control.action.scale.setText(ResUtil.getStringArray(R.array.select_scale)[scale]);
     }
 
@@ -1216,7 +1230,7 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     }
 
     private void seamless(Flag flag) {
-        Episode episode = flag.find(mHistory.getVodRemarks(), getMark().isEmpty());
+        Episode episode = flag.find(mHistory.getEpisode(), getMark().isEmpty());
         setQualityVisible(episode != null && episode.isSelected() && mQualityAdapter.getItemCount() > 1);
         if (episode == null || episode.isSelected()) return;
         selectEpisode(episode, false);
@@ -1627,11 +1641,39 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     }
 
     private void onLut() {
-        mBinding.lutQuick.toggle(player(), mBinding.exo, this::onLutChanged, this::onLutImport);
+        mBinding.lutQuick.toggle(player(), mBinding.exo, this::onLutChanged, new com.fongmi.android.tv.ui.custom.LutQuickPanel.ImportCallback() {
+            @Override
+            public void onImportLut() {
+                onLutImport();
+            }
+
+            @Override
+            public void onSelectLutDir() {
+                onLutDir();
+            }
+        });
     }
 
     private void onLutImport() {
+        if (!LutStore.hasUserDir()) {
+            pendingLutImport = true;
+            chooseLutDir();
+            return;
+        }
+        chooseLutFile();
+    }
+
+    private void onLutDir() {
+        pendingLutImport = false;
+        chooseLutDir();
+    }
+
+    private void chooseLutFile() {
         FileChooser.from(mLutFile).show("*/*", new String[]{"application/octet-stream", "text/*", "image/*", "*/*"});
+    }
+
+    private void chooseLutDir() {
+        FileChooser.from(mLutDir).showDirectory();
     }
 
     private void onSpeed() {
@@ -2050,7 +2092,7 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     }
 
     private void updateHistory(Episode item) {
-        boolean sameEpisode = item.matchesName(mHistory.getEpisode());
+        boolean sameEpisode = item.matches(mHistory.getEpisode());
         boolean sameFlag = TextUtils.equals(mHistory.getVodFlag(), getFlag().getFlag());
         if (!sameEpisode || !sameFlag) mIntroSkipPlayback.reset();
         if ((!sameEpisode || !sameFlag) && service() != null) {

@@ -527,6 +527,17 @@ public class PlayerManager implements ParseCallback {
         float speed = preserveState ? getSpeed() : 1f;
         boolean repeat = preserveState && isRepeatOne();
         int decode = engine.getDecode();
+        switchEngine(type, persist, notifyPrepare, decode, position, speed, repeat);
+    }
+
+    private void switchEngine(int type, boolean persist, boolean preserveState, boolean notifyPrepare, int decode) {
+        long position = preserveState ? getPosition() : 0;
+        float speed = preserveState ? getSpeed() : 1f;
+        boolean repeat = preserveState && isRepeatOne();
+        switchEngine(type, persist, notifyPrepare, decode, position, speed, repeat);
+    }
+
+    private void switchEngine(int type, boolean persist, boolean notifyPrepare, int decode, long position, float speed, boolean repeat) {
         prepareSeq++;
         resetLutRuntimeState("switch_player", true);
         engine.release();
@@ -536,7 +547,7 @@ public class PlayerManager implements ParseCallback {
             PlayerSetting.putPlayer(type);
         }
         if (SpiderDebug.isEnabled()) SpiderDebug.log("player", "switch player type=%d persist=%s position=%d spec=%s", type, persist, position, debugSpec());
-        engine = buildEngine(playerType, decode);
+        engine = buildEngine(playerType, sanitizeDecode(decode));
         player = engine.getPlayer();
         callback.onPlayerRebuild(player);
         if (spec == null || spec.getUrl() == null) return;
@@ -1180,7 +1191,7 @@ public class PlayerManager implements ParseCallback {
         App.removeCallbacks(runnable);
         retry = 0;
         localProxyRetry = 0;
-        switchEngine(next, false, true, true);
+        switchEngine(next, false, true, true, fallbackDecode(playerType, next, engine.getDecode()));
         return true;
     }
 
@@ -1214,6 +1225,14 @@ public class PlayerManager implements ParseCallback {
             return PLAYER_FALLBACK_ORDER[(i + 1) % PLAYER_FALLBACK_ORDER.length];
         }
         return PlayerSetting.EXO;
+    }
+
+    static int fallbackDecode(int from, int to, int decode) {
+        return from == to ? sanitizeDecode(decode) : PlayerEngine.HARD;
+    }
+
+    private static int sanitizeDecode(int decode) {
+        return decode == PlayerEngine.SOFT ? PlayerEngine.SOFT : PlayerEngine.HARD;
     }
 
     private int resolveAvailablePlayer(int type) {

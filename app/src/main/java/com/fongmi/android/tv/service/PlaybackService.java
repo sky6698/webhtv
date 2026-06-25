@@ -244,6 +244,7 @@ public class PlaybackService extends MediaLibraryService implements MediaLibrary
         syncAudioHistoryProgress(true);
         clearAudioHistoryRecord();
         stopAndClear();
+        removeForeground();
         stopSelf();
     }
 
