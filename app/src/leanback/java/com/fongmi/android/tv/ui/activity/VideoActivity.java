@@ -279,7 +279,7 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
 
     private static boolean shouldOpenLegacyTmdbDetail(String key, boolean cast) {
         int mode = Setting.getDetailOpenMode();
-        return canOpenLegacyTmdbDetail(key, cast) && Setting.isTmdbDetailPage() && (mode == Setting.DETAIL_OPEN_ENHANCED || mode == Setting.DETAIL_OPEN_PLAYER);
+        return canOpenLegacyTmdbDetail(key, cast) && Setting.isTmdbDetailPage() && Setting.isStandaloneTmdbDetailMode(mode);
     }
 
     public static void start(Activity activity, String url) {

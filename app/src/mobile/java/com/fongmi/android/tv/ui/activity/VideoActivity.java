@@ -302,7 +302,7 @@ public class VideoActivity extends PlaybackActivity implements Clock.Callback, C
 
     private static boolean shouldOpenLegacyTmdbDetail(String key) {
         int mode = Setting.getDetailOpenMode();
-        return canOpenLegacyTmdbDetail(key) && Setting.isTmdbDetailPage() && (mode == Setting.DETAIL_OPEN_ENHANCED || mode == Setting.DETAIL_OPEN_PLAYER);
+        return canOpenLegacyTmdbDetail(key) && Setting.isTmdbDetailPage() && Setting.isStandaloneTmdbDetailMode(mode);
     }
 
     public static void start(Activity activity, String url) {
