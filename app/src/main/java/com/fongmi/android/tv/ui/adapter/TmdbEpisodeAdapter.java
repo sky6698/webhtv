@@ -109,7 +109,9 @@ public class TmdbEpisodeAdapter extends RecyclerView.Adapter<TmdbEpisodeAdapter.
         int episodeNumber = episodeNumber(episode, position);
         TmdbEpisode tmdbEpisode = tmdbItems.get(episodeNumber);
         String tmdbTitle = tmdbEpisode != null ? tmdbEpisode.getTitle() : "";
-        String title = getTitle(episode, episodeNumber, tmdbTitle);
+        String cleanTitle = getCleanTitle(episode, episodeNumber, tmdbTitle);
+        String title = titleWithFileSize(episode, cleanTitle);
+        String fileSize = episodeFileSize(episode);
         String date = tmdbEpisode != null ? tmdbEpisode.getDate() : "";
         String overview = tmdbEpisode != null ? tmdbEpisode.getOverview() : episode.getDesc();
         boolean activated = episode.equals(selected);
@@ -121,8 +123,9 @@ public class TmdbEpisodeAdapter extends RecyclerView.Adapter<TmdbEpisodeAdapter.
 
         applyCardSize(holder, compact);
         if (mode == Mode.GRID) {
-            holder.binding.index.setText(title);
+            holder.binding.index.setText(cleanTitle);
             holder.binding.index.setTextSize(14f);
+            bindFileSize(holder, fileSize, !TextUtils.isEmpty(date));
             holder.binding.title.setVisibility(View.GONE);
             holder.binding.date.setText(date);
             holder.binding.date.setVisibility(TextUtils.isEmpty(date) ? View.GONE : View.VISIBLE);
@@ -130,12 +133,15 @@ public class TmdbEpisodeAdapter extends RecyclerView.Adapter<TmdbEpisodeAdapter.
         } else if (compact) {
             holder.binding.index.setText(title);
             holder.binding.index.setTextSize(14f);
+            holder.binding.fileSize.setVisibility(View.GONE);
             holder.binding.title.setVisibility(View.GONE);
             holder.binding.date.setVisibility(View.GONE);
             holder.binding.overview.setVisibility(View.GONE);
         } else {
-            holder.binding.index.setText(title);
+            holder.binding.index.setText(isPhoneWidth(holder.itemView) ? cleanTitle : title);
             holder.binding.index.setTextSize(12f);
+            if (isPhoneWidth(holder.itemView)) bindFileSize(holder, fileSize, !TextUtils.isEmpty(date));
+            else holder.binding.fileSize.setVisibility(View.GONE);
             holder.binding.title.setVisibility(View.GONE);
             holder.binding.date.setText(date);
             holder.binding.date.setVisibility(TextUtils.isEmpty(date) ? View.GONE : View.VISIBLE);
@@ -150,6 +156,7 @@ public class TmdbEpisodeAdapter extends RecyclerView.Adapter<TmdbEpisodeAdapter.
         holder.binding.badge.setVisibility(TextUtils.isEmpty(holder.binding.badge.getText()) ? View.GONE : View.VISIBLE);
         applyBadgeStyle(holder.binding.date, showVisual);
         applyBadgeStyle(holder.binding.badge, showVisual);
+        applyBadgeStyle(holder.binding.fileSize, showVisual);
         TmdbCardFocusHelper.bind(
                 holder.binding.getRoot(),
                 activated ? (light ? 0xFFE5F7EC : 0x6630A86B) : (light ? 0xEEFFFFFF : 0xCC16202A),
@@ -206,16 +213,39 @@ public class TmdbEpisodeAdapter extends RecyclerView.Adapter<TmdbEpisodeAdapter.
     }
 
     public static String getTitle(Episode episode, int number, String tmdbTitle) {
+        return titleWithFileSize(episode, getCleanTitle(episode, number, tmdbTitle));
+    }
+
+    public static String getCleanTitle(Episode episode, int number, String tmdbTitle) {
         String label = number > 0 ? String.valueOf(number) : episode.getName();
-        return formatTitle(label, episode.getName(), tmdbTitle);
+        return formatCleanTitle(label, episode.getName(), tmdbTitle);
     }
 
     public static String formatTitle(String label, String sourceName, String tmdbTitle) {
-        String title = label;
-        if (!TextUtils.isEmpty(tmdbTitle) && !TextUtils.equals(label, tmdbTitle) && !TextUtils.equals(sourceName, tmdbTitle)) {
-            title = label + ". " + tmdbTitle;
+        return EpisodeTitleFormatter.withSourceFileSize(sourceName, formatCleanTitle(label, sourceName, tmdbTitle), Setting.isTmdbEpisodeFileSize());
+    }
+
+    public static String formatCleanTitle(String label, String sourceName, String tmdbTitle) {
+        return EpisodeTitleFormatter.formatTmdbTitle(label, sourceName, tmdbTitle);
+    }
+
+    private static String titleWithFileSize(Episode episode, String title) {
+        return EpisodeTitleFormatter.withSourceFileSize(episode.getName(), title, Setting.isTmdbEpisodeFileSize());
+    }
+
+    private String episodeFileSize(Episode episode) {
+        if (!Setting.isTmdbEpisodeFileSize()) return "";
+        return EpisodeTitleFormatter.extractFileSize(episode.getName());
+    }
+
+    private void bindFileSize(ViewHolder holder, String fileSize, boolean belowDate) {
+        holder.binding.fileSize.setText(fileSize);
+        holder.binding.fileSize.setVisibility(TextUtils.isEmpty(fileSize) ? View.GONE : View.VISIBLE);
+        ViewGroup.LayoutParams params = holder.binding.fileSize.getLayoutParams();
+        if (params instanceof ViewGroup.MarginLayoutParams marginParams) {
+            marginParams.topMargin = dp(holder.itemView, belowDate ? 36 : 8);
+            holder.binding.fileSize.setLayoutParams(marginParams);
         }
-        return EpisodeTitleFormatter.withSourceFileSize(sourceName, title, Setting.isTmdbEpisodeFileSize());
     }
 
     private int episodeNumber(Episode episode, int position) {
