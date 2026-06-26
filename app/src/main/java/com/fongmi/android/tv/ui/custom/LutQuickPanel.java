@@ -30,6 +30,7 @@ import java.util.Set;
 public class LutQuickPanel extends FrameLayout {
 
     private static final long FAVORITE_DOUBLE_CLICK_MS = 450;
+    private static final int PANEL_WIDTH_DP = 252;
 
     private MaterialTextView all;
     private MaterialTextView delay;
@@ -208,7 +209,7 @@ public class LutQuickPanel extends FrameLayout {
 
     private View createPanel() {
         FrameLayout container = new FrameLayout(getContext());
-        FrameLayout.LayoutParams containerParams = new FrameLayout.LayoutParams(dp(300), LayoutParams.MATCH_PARENT, Gravity.END);
+        FrameLayout.LayoutParams containerParams = new FrameLayout.LayoutParams(dp(PANEL_WIDTH_DP), LayoutParams.MATCH_PARENT, Gravity.END);
         container.setLayoutParams(containerParams);
         container.setBackgroundColor(0xE6101118);
         container.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -282,8 +283,8 @@ public class LutQuickPanel extends FrameLayout {
 
     private void updatePanelWidth() {
         ViewGroup.LayoutParams params = panel.getLayoutParams();
-        if (params == null || getWidth() <= 0) return;
-        params.width = Math.max(dp(280), Math.min(dp(360), Math.round(getWidth() * 0.5f)));
+        if (params == null) return;
+        params.width = dp(PANEL_WIDTH_DP);
         panel.setLayoutParams(params);
     }
 
