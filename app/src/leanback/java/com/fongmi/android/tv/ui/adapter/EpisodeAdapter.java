@@ -45,6 +45,7 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.ViewHold
     private final List<Episode> mItems;
     private final int maxWidth;
     private final int spacing;
+    private View.OnKeyListener keyListener;
     private int nextFocusDown;
     private int nextFocusUp;
     private int column;
@@ -54,14 +55,22 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.ViewHold
     private String fallbackStillUrl = "";
 
     public EpisodeAdapter(OnClickListener listener) {
-        this(listener, null);
+        this(listener, null, ResUtil.getScreenWidth() - ResUtil.dp2px(48));
     }
 
     public EpisodeAdapter(OnClickListener listener, OnLongClickListener longClickListener) {
+        this(listener, longClickListener, ResUtil.getScreenWidth() - ResUtil.dp2px(48));
+    }
+
+    public EpisodeAdapter(OnClickListener listener, int maxWidth) {
+        this(listener, null, maxWidth);
+    }
+
+    public EpisodeAdapter(OnClickListener listener, OnLongClickListener longClickListener, int maxWidth) {
         mListener = listener;
         mLongClickListener = longClickListener;
         mItems = new ArrayList<>();
-        maxWidth = ResUtil.getScreenWidth() - ResUtil.dp2px(48);
+        this.maxWidth = Math.max(ResUtil.dp2px(240), maxWidth);
         spacing = ResUtil.dp2px(8);
         column = 1;
     }
@@ -161,6 +170,11 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.ViewHold
         notifyDataSetChanged();
     }
 
+    public void setOnKeyListener(View.OnKeyListener keyListener) {
+        this.keyListener = keyListener;
+        notifyDataSetChanged();
+    }
+
     public void setColumn(int column) {
         column = Math.max(1, column);
         if (this.column == column) return;
@@ -168,9 +182,17 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.ViewHold
         notifyDataSetChanged();
     }
 
+    public int getColumn() {
+        return column;
+    }
+
     public static int getColumn(List<Episode> items) {
+        return getColumn(items, ResUtil.getScreenWidth() - ResUtil.dp2px(48));
+    }
+
+    public static int getColumn(List<Episode> items, int maxWidth) {
         int maxTextWidth = 0;
-        int maxWidth = ResUtil.getScreenWidth() - ResUtil.dp2px(48);
+        maxWidth = Math.max(ResUtil.dp2px(240), maxWidth);
         int spacing = ResUtil.dp2px(8);
         int padding = ResUtil.dp2px(40);
         EpisodeTitleCompact.apply(items);

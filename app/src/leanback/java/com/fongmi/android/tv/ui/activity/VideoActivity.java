@@ -93,7 +93,7 @@ import com.fongmi.android.tv.ui.custom.CustomSeekView;
 import com.fongmi.android.tv.ui.custom.PlayerOsdController;
 import com.fongmi.android.tv.ui.dialog.ContentDialog;
 import com.fongmi.android.tv.ui.dialog.DanmakuDialog;
-import com.fongmi.android.tv.ui.dialog.EpisodeDialog;
+import com.fongmi.android.tv.ui.dialog.EpisodeListDialog;
 import com.fongmi.android.tv.ui.dialog.QuickSearchDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.TmdbSearchDialog;
@@ -825,6 +825,7 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         mActionButtons = new HashMap<>();
         addActionButton(PlayerButtonSetting.NEXT, mBinding.control.action.next);
         addActionButton(PlayerButtonSetting.PREV, mBinding.control.action.prev);
+        addActionButton(PlayerButtonSetting.EPISODES, mBinding.control.action.episodes);
         addActionButton(PlayerButtonSetting.RESET, mBinding.control.action.reset);
         addActionButton(PlayerButtonSetting.CHANGE, mBinding.control.action.change2);
         addActionButton(PlayerButtonSetting.FULLSCREEN, mBinding.control.action.fullscreen);
@@ -1322,6 +1323,7 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         updateEpisodeFallbackStillUrl();
         mEpisodeAdapter.setUseTmdbCard(useTmdbCards);
         mEpisodeGridAdapter.setUseTmdbCard(useTmdbCards);
+        applyActionButtonVisibility();
         mEpisodeAdapter.addAll(items);
         mEpisodeGridAdapter.addAll(items);
 
@@ -1806,6 +1808,12 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         showControl(exit ? mBinding.control.action.fullscreen : mBinding.control.action.player);
     }
 
+    private void onEpisodes() {
+        if (mFlagAdapter.getItemCount() == 0 || mEpisodeAdapter.getItemCount() < 2) return;
+        hideControl();
+        EpisodeListDialog.create().flags(mFlagAdapter.getItems()).show(this);
+    }
+
     private void onRepeat() {
         player().setRepeatOne(!player().isRepeatOne());
         mBinding.control.action.repeat.setSelected(player().isRepeatOne());
@@ -2116,11 +2124,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     private void onToggle() {
         if (isVisible(mBinding.control.getRoot())) hideControl();
         else showControl(getFocus2());
-    }
-
-    private void onEpisodes() {
-        if (mEpisodeAdapter == null || mEpisodeAdapter.getItemCount() == 0) return;
-        EpisodeDialog.create().episodes(mEpisodeAdapter.getItems()).reverseAction(this::onRevSort).show(this);
     }
 
     private void showProgress() {
@@ -4170,7 +4173,10 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     protected void onStart() {
         super.onStart();
         mClock.stop().start();
-        if (mOsd != null) mOsd.start();
+        if (mOsd != null) {
+            mOsd.setDiagnosticsVisible(PlayerSetting.isOsdDiagnostics());
+            mOsd.start();
+        }
     }
 
     @Override
