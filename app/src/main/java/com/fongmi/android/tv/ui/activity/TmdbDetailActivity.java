@@ -15,6 +15,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -1028,7 +1029,7 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.headerTitle.setTextColor(colors.primary);
         binding.title.setTextColor(colors.primary);
         binding.subtitle.setTextColor(colors.secondary);
-        binding.sourceValue.setTextColor(colors.muted);
+        styleSourceValue();
         binding.overview.setTextColor(colors.body);
         binding.overviewToggle.setTextColor(colors.accent);
         binding.episodeEmpty.setTextColor(colors.secondary);
@@ -1056,6 +1057,15 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         if (episodePhotoAdapter != null) episodePhotoAdapter.setLight(lightTheme);
         setDetailAdaptersLight(lightTheme);
         if (isCinemaMode()) scheduleBackdropSlide(BACKDROP_SLIDE_DELAY_MS);
+    }
+
+    private void styleSourceValue() {
+        int titleColor = binding.flagTitle.getCurrentTextColor();
+        binding.sourceValue.setAlpha(1f);
+        binding.sourceValue.setTextColor(titleColor);
+        binding.sourceValue.setLinkTextColor(titleColor);
+        binding.sourceValue.setTextSize(TypedValue.COMPLEX_UNIT_PX, binding.flagTitle.getTextSize());
+        binding.sourceValue.setTypeface(binding.flagTitle.getTypeface());
     }
 
     private void setDetailAdaptersLight(boolean light) {

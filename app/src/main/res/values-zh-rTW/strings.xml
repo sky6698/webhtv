@@ -807,7 +807,7 @@
     <string name="player_osd">屏顯設定</string>
     <string name="player_subtitle_auto_match">自動匹配字幕</string>
     <string name="player_subtitle_language">字幕偏好語言</string>
-    <string name="player_subtitle_assrt_token">ASSRT Token</string>
+    <string name="player_subtitle_assrt_token">射手網 Token</string>
     <string name="subtitle_auto_match_hit">已自動匹配字幕：%1$s</string>
     <string name="subtitle_auto_match_hit_not_applied">已找到字幕但未套用：%1$s</string>
     <string name="subtitle_auto_match_empty">未找到匹配字幕</string>

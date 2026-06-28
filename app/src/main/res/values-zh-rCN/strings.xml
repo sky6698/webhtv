@@ -828,7 +828,7 @@
     <string name="player_osd">屏显设置</string>
     <string name="player_subtitle_auto_match">自动匹配字幕</string>
     <string name="player_subtitle_language">字幕偏好语言</string>
-    <string name="player_subtitle_assrt_token">ASSRT Token</string>
+    <string name="player_subtitle_assrt_token">射手网 Token</string>
     <string name="subtitle_auto_match_hit">已自动匹配字幕：%1$s</string>
     <string name="subtitle_auto_match_hit_not_applied">已找到字幕但未应用：%1$s</string>
     <string name="subtitle_auto_match_empty">未找到匹配字幕</string>
@@ -1289,7 +1289,7 @@
     <string name="detail_media_movie">电影</string>
     <string name="detail_media_tv">剧集</string>
     <string name="detail_media_unknown">详情</string>
-    <string name="detail_source_current">当前站源：%1$s</string>
+    <string name="detail_source_current">站源：%1$s</string>
     <string name="detail_source_empty">暂无可用站源</string>
     <string name="detail_source_episode_empty">暂无可用选集或站源</string>
     <string name="detail_source_searching">正在搜索站源...</string>

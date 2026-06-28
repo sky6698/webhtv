@@ -18,6 +18,8 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.text.style.ClickableSpan;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -2633,6 +2635,7 @@ public class VideoActivity extends PlaybackActivity implements Clock.Callback, C
                 moveFlagAndEpisodeToTmdb();
                 mBinding.progressLayout.showContent();
                 mTmdbHeaderView.bind(mTmdbUIAdapter);
+                styleTmdbSourceInFlagTitle();
                 applyFusionPlayerBelowSpacing();
                 updateTmdbKeepState();
                 requestIntroSkipPlan();
@@ -3246,6 +3249,7 @@ public class VideoActivity extends PlaybackActivity implements Clock.Callback, C
         updateFusionThemeButton();
         if (mTmdbHeaderView != null && mTmdbUIAdapter != null && mTmdbUIAdapter.isLoaded()) {
             mTmdbHeaderView.bind(mTmdbUIAdapter);
+            styleTmdbSourceInFlagTitle();
             applyFusionPlayerBelowSpacing();
         }
     }
@@ -3268,6 +3272,7 @@ public class VideoActivity extends PlaybackActivity implements Clock.Callback, C
         syncFusionHeaderTheme();
         if (mFlagAdapter != null) mFlagAdapter.setTmdbLight(light);
         applyFusionNativeTextColors();
+        styleTmdbSourceInFlagTitle();
     }
 
     private void applyFusionNativeTextColors() {
@@ -3623,6 +3628,26 @@ public class VideoActivity extends PlaybackActivity implements Clock.Callback, C
         params.setMarginStart(ResUtil.dp2px(12));
         source.setLayoutParams(params);
         mBinding.flagTitleBar.addView(source);
+        styleTmdbSourceInFlagTitle();
+    }
+
+    private void styleTmdbSourceInFlagTitle() {
+        View source = mBinding.flagTitleBar.findViewById(R.id.tmdbFusionSource);
+        if (!(source instanceof TextView textView)) return;
+        int titleColor = mBinding.flagText.getCurrentTextColor();
+        textView.setAlpha(1f);
+        textView.setTextColor(titleColor);
+        textView.setLinkTextColor(titleColor);
+        textView.setTextSize(TypedValue.COMPLEX_UNIT_PX, mBinding.flagText.getTextSize());
+        textView.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        textView.setSingleLine(true);
+        textView.setMaxWidth(ResUtil.dp2px(260));
+        if (isLightText(titleColor)) textView.setShadowLayer(ResUtil.dp2px(2), 0, ResUtil.dp2px(1), 0xB0000000);
+        else textView.setShadowLayer(0, 0, 0, 0);
+    }
+
+    private boolean isLightText(int color) {
+        return Color.red(color) + Color.green(color) + Color.blue(color) > 384;
     }
 
     private void setTmdbFlagStyle(boolean enabled) {

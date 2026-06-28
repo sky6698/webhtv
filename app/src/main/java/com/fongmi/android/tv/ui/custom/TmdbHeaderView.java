@@ -4,9 +4,11 @@ import android.app.Activity;
 import android.content.res.Configuration;
 import android.content.res.ColorStateList;
 import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.ImageView;
 import android.widget.TextView;
 
@@ -555,7 +557,7 @@ public class TmdbHeaderView {
         TextView source = headerRoot.findViewById(R.id.tmdbFusionSource);
         if (source != null) {
             String siteName = currentSite() == null ? "" : currentSite().getName();
-            source.setText(TextUtils.isEmpty(siteName) ? "" : "当前站源： " + siteName);
+            source.setText(TextUtils.isEmpty(siteName) ? "" : "站源： " + siteName);
             source.setVisibility(TextUtils.isEmpty(siteName) ? View.GONE : View.VISIBLE);
         }
         FlexboxLayout meta = headerRoot.findViewById(R.id.tmdbFusionMeta);
@@ -1350,11 +1352,29 @@ public class TmdbHeaderView {
         styleFusionExternalLinks(dark);
         styleFusionMetaChips(dark);
         styleFusionPlaybackControls(panel, line, primary);
-        setTextColor(R.id.tmdbFusionSource, muted);
+        styleFusionSource(primary, muted);
         styleFusionSpacing();
         TextView powered = findPoweredBy();
         if (powered != null) styleFusionBackdropText(powered, COLOR_FUSION_BACKDROP_WATERMARK);
         tintActions(dark ? Setting.DETAIL_STYLE_CINEMA : Setting.DETAIL_STYLE_PROFILE);
+    }
+
+    private void styleFusionSource(int titleColor, int mutedColor) {
+        TextView source = headerRoot.findViewById(R.id.tmdbFusionSource);
+        if (source == null) return;
+        boolean inPlaybackControls = isDescendantOf(headerRoot.findViewById(R.id.tmdbPlaybackControls), source);
+        source.setTextColor(inPlaybackControls ? titleColor : mutedColor);
+        source.setTextSize(inPlaybackControls ? 16 : 12);
+        source.setGravity(inPlaybackControls ? Gravity.CENTER_VERTICAL | Gravity.END : Gravity.END);
+        source.setMaxWidth(ResUtil.dp2px(inPlaybackControls ? 260 : 220));
+    }
+
+    private boolean isDescendantOf(View ancestor, View child) {
+        if (ancestor == null || child == null) return false;
+        for (ViewParent parent = child.getParent(); parent instanceof View; parent = parent.getParent()) {
+            if (parent == ancestor) return true;
+        }
+        return false;
     }
 
     private boolean isDarkDetailTheme() {
