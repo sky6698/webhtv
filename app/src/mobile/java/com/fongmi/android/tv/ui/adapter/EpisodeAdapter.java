@@ -12,6 +12,7 @@ import android.view.ViewConfiguration;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.bean.Episode;
 import com.fongmi.android.tv.bean.TmdbEpisode;
 import com.fongmi.android.tv.databinding.AdapterEpisodeGridBinding;
@@ -22,8 +23,9 @@ import com.fongmi.android.tv.ui.base.ViewType;
 import com.fongmi.android.tv.ui.custom.EpisodeTitlePopup;
 import com.fongmi.android.tv.ui.holder.EpisodeGridHolder;
 import com.fongmi.android.tv.ui.holder.EpisodeHoriHolder;
-import com.fongmi.android.tv.utils.EpisodeTitleFormatter;
 import com.fongmi.android.tv.utils.EpisodeTitleCompact;
+import com.fongmi.android.tv.utils.EpisodeTitleFormatter;
+import com.fongmi.android.tv.utils.Task;
 import com.google.android.material.textview.MaterialTextView;
 
 import java.util.ArrayList;
@@ -33,8 +35,14 @@ public class EpisodeAdapter extends RecyclerView.Adapter<BaseEpisodeHolder> {
 
     private final OnClickListener listener;
     private final List<Episode> mItems;
+    private OnTitleReadyListener titleReadyListener;
+    private List<Episode> pendingTitleItems;
+    private List<String> pendingTitleRawNames;
+    private boolean pendingTitleCompact;
+    private int titleRequestId;
     private int viewType;
     private boolean useTmdbCard;
+    private boolean nativeGridExpanded;
     private String fallbackStillUrl = "";
 
     public EpisodeAdapter(OnClickListener listener, int viewType) {
@@ -52,11 +60,131 @@ public class EpisodeAdapter extends RecyclerView.Adapter<BaseEpisodeHolder> {
         void onItemClick(Episode item);
     }
 
+    public interface OnTitleReadyListener {
+
+        void onTitleReady();
+    }
+
+    public void setOnTitleReadyListener(OnTitleReadyListener listener) {
+        this.titleReadyListener = listener;
+    }
+
     public void addAll(List<Episode> items) {
-        EpisodeTitleCompact.apply(items);
+        if (titleReadyListener == null) {
+            invalidateTitleRequest();
+            ArrayList<Episode> snapshot = items == null ? new ArrayList<>() : new ArrayList<>(items);
+            EpisodeTitleCompact.apply(snapshot);
+            mItems.clear();
+            mItems.addAll(snapshot);
+            notifyDataSetChanged();
+            return;
+        }
+        requestTitleCompaction(items, true);
+    }
+
+    public void refreshTitles() {
+        if (titleReadyListener == null) {
+            invalidateTitleRequest();
+            EpisodeTitleCompact.apply(mItems);
+            notifyDataSetChanged();
+            return;
+        }
+        requestTitleCompaction(mItems, false);
+    }
+
+
+    public void refreshMetadata(List<Episode> items) {
+        invalidateTitleRequest();
+        ArrayList<Episode> snapshot = items == null ? new ArrayList<>() : new ArrayList<>(items);
+        if (hasSameItems(snapshot)) {
+            if (!mItems.isEmpty()) notifyItemRangeChanged(0, getItemCount());
+            return;
+        }
         mItems.clear();
-        mItems.addAll(items);
+        mItems.addAll(snapshot);
         notifyDataSetChanged();
+    }
+
+    private boolean hasSameItems(List<Episode> items) {
+        if (items.size() != mItems.size()) return false;
+        for (int i = 0; i < items.size(); i++) if (items.get(i) != mItems.get(i)) return false;
+        return true;
+    }
+
+    private void requestTitleCompaction(List<Episode> items, boolean replaceItems) {
+        ArrayList<Episode> snapshot = items == null ? new ArrayList<>() : new ArrayList<>(items);
+        ArrayList<String> rawNames = new ArrayList<>(snapshot.size());
+        for (Episode episode : snapshot) {
+            rawNames.add(episode.getRawDisplayName());
+            episode.setDisplayName(null);
+        }
+        if (replaceItems) {
+            mItems.clear();
+            mItems.addAll(snapshot);
+        }
+        notifyDataSetChanged();
+        boolean compact = Setting.isCompactEpisodeTitle();
+        if (!compact || snapshot.isEmpty()) {
+            invalidateTitleRequest();
+            notifyTitleReady();
+            return;
+        }
+        if (isPendingTitleRequest(snapshot, rawNames, compact)) return;
+        int requestId = ++titleRequestId;
+        pendingTitleItems = snapshot;
+        pendingTitleRawNames = rawNames;
+        pendingTitleCompact = compact;
+        Task.submit(() -> {
+            List<String> displayNames;
+            try {
+                displayNames = EpisodeTitleCompact.computeRaw(rawNames, compact);
+            } catch (Throwable ignored) {
+                displayNames = null;
+            }
+            List<String> result = displayNames;
+            App.post(() -> finishTitleCompaction(requestId, snapshot, rawNames, result));
+        });
+    }
+
+    private void finishTitleCompaction(int requestId, List<Episode> snapshot, List<String> rawNames, List<String> displayNames) {
+        if (requestId != titleRequestId) return;
+        clearPendingTitleRequest();
+        if (!isCurrentTitleRequest(snapshot, rawNames)) return;
+        if (displayNames != null) EpisodeTitleCompact.apply(snapshot, displayNames);
+        notifyDataSetChanged();
+        notifyTitleReady();
+    }
+
+    private boolean isPendingTitleRequest(List<Episode> snapshot, List<String> rawNames, boolean compact) {
+        if (pendingTitleItems == null || pendingTitleRawNames == null || pendingTitleCompact != compact) return false;
+        if (snapshot.size() != pendingTitleItems.size() || rawNames.size() != pendingTitleRawNames.size()) return false;
+        for (int i = 0; i < snapshot.size(); i++) {
+            if (snapshot.get(i) != pendingTitleItems.get(i) || !TextUtils.equals(rawNames.get(i), pendingTitleRawNames.get(i))) return false;
+        }
+        return true;
+    }
+
+    private boolean isCurrentTitleRequest(List<Episode> snapshot, List<String> rawNames) {
+        if (snapshot.size() != mItems.size()) return false;
+        for (int i = 0; i < snapshot.size(); i++) {
+            Episode current = mItems.get(i);
+            if (current != snapshot.get(i) || !TextUtils.equals(rawNames.get(i), current.getRawDisplayName())) return false;
+        }
+        return true;
+    }
+
+    private void invalidateTitleRequest() {
+        titleRequestId++;
+        clearPendingTitleRequest();
+    }
+
+    private void clearPendingTitleRequest() {
+        pendingTitleItems = null;
+        pendingTitleRawNames = null;
+    }
+
+    private void notifyTitleReady() {
+        if (titleReadyListener != null) titleReadyListener.onTitleReady();
     }
 
     public void setUseTmdbCard(boolean useTmdbCard) {
@@ -73,6 +201,12 @@ public class EpisodeAdapter extends RecyclerView.Adapter<BaseEpisodeHolder> {
 
     public boolean isUsingTmdbCard() {
         return useTmdbCard;
+    }
+
+    public void setNativeGridExpanded(boolean nativeGridExpanded) {
+        if (this.nativeGridExpanded == nativeGridExpanded) return;
+        this.nativeGridExpanded = nativeGridExpanded;
+        notifyDataSetChanged();
     }
 
     public void setFallbackStillUrl(String fallbackStillUrl) {
@@ -262,6 +396,7 @@ public class EpisodeAdapter extends RecyclerView.Adapter<BaseEpisodeHolder> {
     public void onBindViewHolder(@NonNull BaseEpisodeHolder holder, int position) {
         holder.setUseTmdbCard(useTmdbCard);
         holder.setFallbackStillUrl(fallbackStillUrl);
+        holder.setNativeGridExpanded(nativeGridExpanded);
         holder.initView(mItems.get(position));
     }
 
@@ -271,7 +406,7 @@ public class EpisodeAdapter extends RecyclerView.Adapter<BaseEpisodeHolder> {
         if (viewType == ViewType.HORI) {
             return new EpisodeHoriHolder(AdapterEpisodeHoriBinding.inflate(LayoutInflater.from(parent.getContext()), parent, false), listener);
         } else {
-            return new EpisodeGridHolder(AdapterEpisodeGridBinding.inflate(LayoutInflater.from(parent.getContext()), parent, false), listener);
+            return new EpisodeGridHolder(AdapterEpisodeGridBinding.inflate(LayoutInflater.from(parent.getContext()), parent, false), listener, parent);
         }
     }
 }

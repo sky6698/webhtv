@@ -53,8 +53,9 @@
     <androidx.core.widget.NestedScrollView
         android:id="@+id/listScroll"
         android:layout_width="match_parent"
-        android:layout_height="320dp"
+        android:layout_height="0dp"
         android:layout_marginTop="16dp"
+        android:layout_weight="1"
         android:clipToPadding="false"
         android:fadeScrollbars="false"
         android:overScrollMode="never"
@@ -128,7 +129,7 @@
                     android:maxLines="2"
                     android:textColor="#5F6368"
                     android:textSize="14sp"
-                    tools:text="5.5.6-202606281200" />
+                    tools:text="5.6.0-202608101200" />
 
                 <androidx.appcompat.widget.LinearLayoutCompat
                     android:id="@+id/stableContent"
@@ -232,7 +233,7 @@
                     android:maxLines="2"
                     android:textColor="#5F6368"
                     android:textSize="14sp"
-                    tools:text="5.5.6-beta-202606281200" />
+                    tools:text="5.6.0-beta-202608101200" />
 
                 <androidx.appcompat.widget.LinearLayoutCompat
                     android:id="@+id/betaContent"

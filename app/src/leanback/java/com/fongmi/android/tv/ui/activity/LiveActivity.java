@@ -61,6 +61,7 @@ import com.fongmi.android.tv.ui.custom.PlayerOsdController;
 import com.fongmi.android.tv.ui.dialog.HistoryDialog;
 import com.fongmi.android.tv.ui.dialog.LiveDialog;
 import com.fongmi.android.tv.ui.dialog.PassDialog;
+import com.fongmi.android.tv.ui.dialog.PlayerKernelDialog;
 import com.fongmi.android.tv.ui.dialog.PlayerOsdDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.TrackDialog;
@@ -78,6 +79,8 @@ import java.util.Iterator;
 import java.util.List;
 
 public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnClickListener, ChannelAdapter.OnClickListener, EpgDataAdapter.OnClickListener, CustomKeyDownLive.Listener, CustomLiveListView.Callback, TrackDialog.Listener, PassListener, ConfigListener, LiveListener {
+
+    private static final long PLAYBACK_END_RETRY_DELAY = 500;
 
     private ActivityLiveBinding mBinding;
     private ChannelAdapter mChannelAdapter;
@@ -100,6 +103,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     private Runnable mR2;
     private Runnable mR3;
     private Runnable mR4;
+    private Runnable mEndRetry;
     private Clock mClock;
     private View mFocus2;
     private boolean playbackCatchup;
@@ -178,6 +182,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mR2 = this::setTraffic;
         mR3 = this::hideInfo;
         mR4 = this::hideUI;
+        mEndRetry = this::checkNext;
         setRecyclerView();
         mOsd = new PlayerOsdController(mBinding.osd.getRoot(), mBinding.osd.osdTopLeft, mBinding.osd.osdTopRight, mBinding.osd.osdBottomLeft, mBinding.osd.osdBottomRight, mBinding.osd.osdDiagnostics, mBinding.osd.osdMiniProgress, new PlayerOsdController.Source() {
             @Override
@@ -471,25 +476,19 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mBinding.control.action.change.setSelected(LiveSetting.isChange());
     }
 
-    private void onChoose() {
-        String[] kernel = ResUtil.getStringArray(R.array.select_player_kernel);
-        String[] items = new String[kernel.length + 1];
-        System.arraycopy(kernel, 0, items, 0, kernel.length);
-        items[kernel.length] = "外调";
-        new androidx.appcompat.app.AlertDialog.Builder(this).setItems(items, (dialog, which) -> {
-            if (which < kernel.length) {
-                player().switchPlayerManually(which);
-                setPlayerKernel();
-                setDecode();
-            } else {
-                PlayerHelper.choose(this, player().getUrl(), player().getHeaders(), player().isVod(), player().getPosition(), mBinding.widget.title.getText());
-                setRedirect(true);
-            }
-        }).show();
+    private void onPlayerKernel() {
+        PlayerKernelDialog.show(this, player().getPlayerType(), this::switchPlayerKernel, this::onExternalPlayer);
     }
 
-    private void onPlayerKernel() {
-        onChoose();
+    private void onExternalPlayer() {
+        PlayerHelper.choose(this, player().getUrl(), player().getHeaders(), player().isVod(), player().getPosition(), mBinding.widget.title.getText());
+        setRedirect(true);
+    }
+
+    private void switchPlayerKernel(int type) {
+        player().switchPlayer(type);
+        setPlayerKernel();
+        setDecode();
         setR1Callback();
     }
 
@@ -593,17 +592,18 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
                 break;
             case Player.STATE_ENDED:
                 checkEnded();
+                updatePlayControl(false);
                 break;
         }
     }
 
     @Override
     protected void onPlayingChanged(boolean isPlaying) {
-        if (isPlaying) {
-            mBinding.control.action.action.setText(R.string.pause);
-        } else if (isPaused()) {
-            mBinding.control.action.action.setText(R.string.play);
-        }
+        if (isPlaying || isPaused()) updatePlayControl(isPlaying);
+    }
+
+    private void updatePlayControl(boolean isPlaying) {
+        mBinding.control.action.action.setText(isPlaying ? R.string.pause : R.string.play);
     }
 
     @Override
@@ -645,7 +645,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     private void hideProgress() {
         mBinding.progress.getRoot().setVisibility(View.GONE);
         App.removeCallbacks(mR2);
-        Traffic.reset();
+        Traffic.reset(mBinding.progress.traffic);
     }
 
     private void showError(String text) {
@@ -695,7 +695,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     }
 
     private void setTraffic() {
-        Traffic.setSpeed(mBinding.progress.traffic);
+        Traffic.setSpeed(mBinding.progress.traffic, service() == null ? null : player());
         App.post(mR2, 1000);
     }
 
@@ -830,6 +830,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     private void fetch(EpgData item) {
         if (mChannel == null) return;
+        App.removeCallbacks(mEndRetry);
         playbackCatchup = true;
         mViewModel.getUrl(mChannel, item);
         player().clear();
@@ -839,6 +840,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     private void fetch() {
         if (mChannel == null) return;
+        App.removeCallbacks(mEndRetry);
         playbackCatchup = false;
         LiveConfig.get().setKeep(mChannel);
         mViewModel.getUrl(mChannel);
@@ -967,11 +969,8 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     }
 
     private void checkEnded() {
-        if (player().isLive()) {
-            checkNext();
-        } else {
-            nextChannel();
-        }
+        App.removeCallbacks(mEndRetry);
+        App.post(mEndRetry, PLAYBACK_END_RETRY_DELAY);
     }
 
     private void setTrackVisible() {
@@ -1038,6 +1037,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     }
 
     private void checkNext() {
+        if (mChannel == null) return;
         int current = mChannel.getData(mViewModel.getZoneId()).getInRange();
         int position = mChannel.getData(mViewModel.getZoneId()).getSelected() + 1;
         boolean hasNext = position <= current && position > 0;
@@ -1207,6 +1207,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mClock.release();
         Source.get().exit();
         App.removeCallbacks(mR0, mR1, mR2, mR3, mR4);
+        App.removeCallbacks(mEndRetry);
         if (mOsd != null) mOsd.release();
         mViewModel.url().removeObserver(mObserveUrl);
         mViewModel.epg().removeObserver(mObserveEpg);

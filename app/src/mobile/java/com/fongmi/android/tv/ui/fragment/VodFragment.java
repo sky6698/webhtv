@@ -1,7 +1,6 @@
 package com.fongmi.android.tv.ui.fragment;
 
 import android.net.Uri;
-import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -41,6 +40,7 @@ import com.fongmi.android.tv.impl.FilterListener;
 import com.fongmi.android.tv.impl.SiteListener;
 import com.fongmi.android.tv.model.SiteViewModel;
 import com.fongmi.android.tv.setting.Setting;
+import com.fongmi.android.tv.setting.AppBranding;
 import com.fongmi.android.tv.ui.activity.HomeActivity;
 import com.fongmi.android.tv.ui.activity.HistoryActivity;
 import com.fongmi.android.tv.ui.activity.KeepActivity;
@@ -48,10 +48,14 @@ import com.fongmi.android.tv.ui.activity.SearchActivity;
 import com.fongmi.android.tv.ui.adapter.TypeAdapter;
 import com.fongmi.android.tv.ui.base.BaseFragment;
 import com.fongmi.android.tv.ui.dialog.ApkPushDialog;
+import com.fongmi.android.tv.ui.dialog.ApkPushMethodDialog;
+import com.fongmi.android.tv.ui.dialog.ApkPushUrlDialog;
 import com.fongmi.android.tv.ui.dialog.FilterDialog;
 import com.fongmi.android.tv.ui.dialog.HistoryDialog;
 import com.fongmi.android.tv.ui.dialog.LinkDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
+import com.fongmi.android.tv.ui.dialog.PushPlayDialog;
+import com.fongmi.android.tv.ui.dialog.PushPlayUrlDialog;
 import com.fongmi.android.tv.ui.dialog.ReceiveDialog;
 import com.fongmi.android.tv.ui.dialog.SiteDialog;
 import com.fongmi.android.tv.ui.dialog.TypeDialog;
@@ -68,9 +72,7 @@ import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 import org.greenrobot.eventbus.ThreadMode;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 
 public class VodFragment extends BaseFragment implements ConfigListener, SiteListener, FilterListener, TypeAdapter.OnClickListener, HomeWebController.Listener {
 
@@ -215,9 +217,7 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
     }
 
     private void setTitle() {
-        List<String> items = Arrays.asList(getHome().getDisplayName(), getConfig().getName(), getString(R.string.app_name));
-        Optional<String> optional = items.stream().filter(s -> !TextUtils.isEmpty(s)).findFirst();
-        optional.ifPresent(s -> mBinding.title.setText(s));
+        mBinding.title.setText(AppBranding.getDisplayName(requireContext(), getHome().getDisplayName(), getConfig().getName()));
     }
 
     private void onTop(View view) {
@@ -293,6 +293,7 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
         else if (item.getItemId() == R.id.history) HistoryActivity.start(requireActivity());
         else if (item.getItemId() == R.id.sync) OneKeySyncDialog.create().show(requireActivity());
         else if (item.getItemId() == R.id.push_apk) ApkPushDialog.create().listener(this::onApkDeviceSelected).show(requireActivity());
+        else if (item.getItemId() == R.id.push_play) PushPlayDialog.create().listener(this::onPushPlayDeviceSelected).show(requireActivity());
         else if (item.getItemId() == R.id.enhance && homeActivity() != null) homeActivity().openEnhanceFromVod();
         else if (item.getItemId() == R.id.web_home_fullscreen) onWebHomeFullscreen();
         else return false;
@@ -306,9 +307,32 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
     }
 
     private void onApkDeviceSelected(Device device) {
+        App.post(() -> {
+            if (!isAdded()) return;
+            ApkPushMethodDialog.create(device).listener(new ApkPushMethodDialog.Listener() {
+                @Override
+                public void onLocal(Device device) {
+                    selectLocalApk(device);
+                }
+
+                @Override
+                public void onLink(Device device) {
+                    ApkPushUrlDialog.create(device).show(requireActivity());
+                }
+            }).show(requireActivity());
+        });
+    }
+
+    private void selectLocalApk(Device device) {
         pendingApkDevice = device;
         App.post(() -> {
             if (isAdded()) apkLauncher.launch(new String[]{"application/vnd.android.package-archive", "application/octet-stream"});
+        });
+    }
+
+    private void onPushPlayDeviceSelected(Device device) {
+        App.post(() -> {
+            if (isAdded()) PushPlayUrlDialog.create(device).show(requireActivity());
         });
     }
 
@@ -358,7 +382,7 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
     private void homeContent() {
         requestNormalChrome();
         showProgress();
-        mBinding.homeWeb.setVisibility(View.GONE);
+        if (mWeb != null) mWeb.hide();
         updateToolbarMenu();
         clearPagerTypes();
         mBinding.pager.setAdapter(new PageAdapter(getChildFragmentManager()));
@@ -396,7 +420,7 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
     }
 
     private void setLogo() {
-        ImgUtil.logo(mBinding.logo);
+        AppBranding.applyLogo(mBinding.logo);
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
@@ -617,7 +641,7 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
         mBinding.type.setVisibility(View.VISIBLE);
         updateTypeMoreVisible();
         mBinding.pager.setVisibility(View.VISIBLE);
-        mBinding.homeWeb.setVisibility(View.GONE);
+        if (mWeb != null) mWeb.hide();
         updateToolbarMenu();
     }
 
@@ -647,10 +671,7 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
     }
 
     private void setHomeWebTopMargin(int margin) {
-        ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) mBinding.homeWeb.getLayoutParams();
-        if (params.topMargin == margin) return;
-        params.topMargin = margin;
-        mBinding.homeWeb.setLayoutParams(params);
+        if (mWeb != null) mWeb.setTopMargin(margin);
     }
 
     private void requestNormalChrome() {

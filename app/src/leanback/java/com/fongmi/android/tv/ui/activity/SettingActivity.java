@@ -116,6 +116,9 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
         mBinding.cache.setOnClickListener(this::onCache);
         mBinding.backup.setOnClickListener(this::onBackup);
         mBinding.enhance.setOnClickListener(this::onEnhance);
+        mBinding.tmdb.setOnClickListener(this::onTmdb);
+        mBinding.ai.setOnClickListener(this::onAi);
+        mBinding.ad.setOnClickListener(this::onAd);
         mBinding.player.setOnClickListener(this::onPlayer);
         mBinding.danmaku.setOnClickListener(this::onDanmaku);
         mBinding.subtitle.setOnClickListener(this::onSubtitle);
@@ -241,6 +244,18 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
 
     private void onEnhance(View view) {
         SettingEnhanceActivity.start(this);
+    }
+
+    private void onTmdb(View view) {
+        SettingTmdbActivity.start(this);
+    }
+
+    private void onAi(View view) {
+        SettingAiActivity.start(this);
+    }
+
+    private void onAd(View view) {
+        SettingAdActivity.start(this);
     }
 
     private void onDanmaku(View view) {

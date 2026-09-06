@@ -51,7 +51,13 @@ public class EpisodeHoriHolder extends BaseEpisodeHolder {
         int position = getBindingAdapterPosition();
         int episodeNumber = item.getNumber() > 0 ? item.getNumber() : position + 1;
         TmdbEpisode tmdbEpisode = item.getTmdbEpisode();
-        if (!TmdbEpisodeMatcher.shouldApply(item, tmdbEpisode, episodeNumber)) {
+        // 跨季映射的集走两参版：源集号是扁平号（如 62），TMDB 是本季集号（如 S2E1），
+        // 三参版会因 tmdbEpisode.getNumber() != episodeNumber 而否决。两参版对已带
+        // mapped 标记的集只校验身份，不要求两个集号相等。
+        boolean valid = item.isTmdbEpisodeMapped()
+                ? TmdbEpisodeMatcher.shouldApply(item, tmdbEpisode)
+                : TmdbEpisodeMatcher.shouldApply(item, tmdbEpisode, episodeNumber);
+        if (!valid) {
             tmdbEpisode = null;
         }
         if (EpisodeCardPolicy.shouldShowCard(useTmdbCard, tmdbEpisode != null, !TextUtils.isEmpty(fallbackStillUrl))) bindCard(item, tmdbEpisode);
@@ -132,7 +138,10 @@ public class EpisodeHoriHolder extends BaseEpisodeHolder {
         binding.nativeFileSize.setText(fileSize);
         binding.nativeFileSize.setVisibility(visible ? View.VISIBLE : View.GONE);
         binding.nativeFileSize.setSelected(binding.text.isActivated() || binding.text.hasFocus());
-        binding.text.setPadding(visible ? ResUtil.dp2px(92) : 0, binding.text.getPaddingTop(), binding.text.getPaddingEnd(), binding.text.getPaddingBottom());
+        // 左右必须成对给：只改左边会让 shape_video_item 的 12dp 右内边距落单，
+        // 按钮里的文本就偏向一侧而不是居中。徽标占位时左边额外让出 92dp。
+        int horizontal = ResUtil.dp2px(12);
+        binding.text.setPadding(visible ? ResUtil.dp2px(92) : horizontal, binding.text.getPaddingTop(), horizontal, binding.text.getPaddingBottom());
     }
 
     private void bindFileSize(String fileSize) {

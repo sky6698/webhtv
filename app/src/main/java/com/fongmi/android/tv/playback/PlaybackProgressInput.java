@@ -1,9 +1,7 @@
 package com.fongmi.android.tv.playback;
 
-import android.text.TextUtils;
-
-import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.db.AppDatabase;
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -13,8 +11,11 @@ import com.google.gson.annotations.SerializedName;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 public class PlaybackProgressInput {
+
+    private static final Gson GSON = new Gson();
 
     @SerializedName("historyKey")
     public String historyKey;
@@ -28,10 +29,20 @@ public class PlaybackProgressInput {
     public String vodPic;
     @SerializedName("flag")
     public String flag;
+    @SerializedName("sourceBindingKey")
+    public String sourceBindingKey;
     @SerializedName("episodeName")
     public String episodeName;
     @SerializedName("episodeUrl")
     public String episodeUrl;
+    @SerializedName("mediaType")
+    public String mediaType;
+    @SerializedName("tmdbId")
+    public int tmdbId;
+    @SerializedName("seasonNumber")
+    public int seasonNumber = -1;
+    @SerializedName("tmdbEpisodeNumber")
+    public int episodeNumber = -1;
     @SerializedName("positionMs")
     public long positionMs;
     @SerializedName("durationMs")
@@ -64,26 +75,35 @@ public class PlaybackProgressInput {
         vodName = safe(vodName);
         vodPic = safe(vodPic);
         flag = safe(flag);
+        sourceBindingKey = safe(sourceBindingKey);
         episodeName = safe(episodeName);
         episodeUrl = safe(episodeUrl);
+        mediaType = safe(mediaType).toLowerCase(Locale.ROOT);
+        if (!"tv".equals(mediaType) && !"movie".equals(mediaType)) mediaType = "";
+        if (seasonNumber < 0) seasonNumber = -1;
+        if (episodeNumber <= 0) episodeNumber = -1;
         configKey = PlaybackConfigIdentity.normalizeKey(configKey);
         configName = safe(configName);
         configUrl = safe(configUrl);
-        if (TextUtils.isEmpty(configKey) && !TextUtils.isEmpty(configUrl)) configKey = PlaybackConfigIdentity.keyForUrl(configUrl);
+        if (empty(configKey) && !empty(configUrl)) configKey = PlaybackConfigIdentity.keyForUrl(configUrl);
         clientKey = safe(clientKey);
         if (speed <= 0) speed = 1f;
         if (durationMs > 0 && positionMs <= 0 && progress > 0) positionMs = Math.round(durationMs * progress);
         if (completed && durationMs > 0 && positionMs < durationMs) positionMs = durationMs;
-        if (updatedAt <= 0) updatedAt = System.currentTimeMillis();
         return this;
     }
 
     public String validate() {
+        return validate(true);
+    }
+
+    String validate(boolean defaultUpdatedAt) {
         normalize();
-        if (TextUtils.isEmpty(siteKey)) return "siteKey不能为空";
-        if (TextUtils.isEmpty(vodId)) return "vodId不能为空";
-        if (TextUtils.isEmpty(vodName)) return "vodName不能为空";
-        if (TextUtils.isEmpty(episodeName)) return "episodeName不能为空";
+        if (updatedAt <= 0 && defaultUpdatedAt) updatedAt = System.currentTimeMillis();
+        if (empty(siteKey)) return "siteKey不能为空";
+        if (empty(vodId)) return "vodId不能为空";
+        if (empty(vodName)) return "vodName不能为空";
+        if (empty(episodeName)) return "episodeName不能为空";
         if (positionMs <= 0) return "positionMs必须大于0";
         if (durationMs <= 0) return "durationMs必须大于0";
         if (positionMs > durationMs && durationMs > 0) positionMs = durationMs;
@@ -91,7 +111,7 @@ public class PlaybackProgressInput {
     }
 
     public static PlaybackProgressInput fromJson(JsonObject object) {
-        PlaybackProgressInput input = App.gson().fromJson(object, PlaybackProgressInput.class);
+        PlaybackProgressInput input = GSON.fromJson(object, PlaybackProgressInput.class);
         if (input == null) input = new PlaybackProgressInput();
         applyAliases(input, object);
         return input.normalize();
@@ -104,7 +124,7 @@ public class PlaybackProgressInput {
     }
 
     public static List<PlaybackProgressInput> listFromJson(String text) {
-        if (TextUtils.isEmpty(text)) return Collections.emptyList();
+        if (empty(text)) return Collections.emptyList();
         JsonElement element = JsonParser.parseString(text);
         if (element == null || element.isJsonNull()) return Collections.emptyList();
         JsonArray array = asArray(element);
@@ -116,7 +136,7 @@ public class PlaybackProgressInput {
 
     public String targetHistoryKey(int cid) {
         normalize();
-        if (!TextUtils.isEmpty(configKey) && !TextUtils.isEmpty(siteKey) && !TextUtils.isEmpty(vodId)) return siteKey + AppDatabase.SYMBOL + vodId + AppDatabase.SYMBOL + cid;
+        if (!empty(configKey) && !empty(siteKey) && !empty(vodId)) return siteKey + AppDatabase.SYMBOL + vodId + AppDatabase.SYMBOL + cid;
         if (validHistoryKey(historyKey)) return historyKey;
         return siteKey + AppDatabase.SYMBOL + vodId + AppDatabase.SYMBOL + cid;
     }
@@ -130,8 +150,13 @@ public class PlaybackProgressInput {
         input.vodName = firstString(input.vodName, object, "name", "title", "vod_name");
         input.vodPic = firstString(input.vodPic, object, "pic", "poster", "vodPic", "vod_pic");
         input.flag = firstString(input.flag, object, "vodFlag", "line", "source");
+        input.sourceBindingKey = firstString(input.sourceBindingKey, object, "flagKey", "source_binding_key");
         input.episodeName = firstString(input.episodeName, object, "episode", "episodeTitle", "vodRemarks", "remarks");
         input.episodeUrl = firstString(input.episodeUrl, object, "url", "playUrl", "episode_url");
+        input.mediaType = firstString(input.mediaType, object, "media_type", "type");
+        input.tmdbId = firstInt(input.tmdbId, object, "tmdb_id", "tmdb");
+        input.seasonNumber = firstInt(input.seasonNumber, object, "season", "season_number", "tmdbSeasonNumber");
+        input.episodeNumber = firstInt(input.episodeNumber, object, "episodeNumber", "episode_number", "tmdb_episode_number");
         input.positionMs = firstLong(input.positionMs, object, "position", "position_ms", "pos");
         input.durationMs = firstLong(input.durationMs, object, "duration", "duration_ms");
         input.updatedAt = firstLong(input.updatedAt, object, "timestamp", "updateTime", "updated_at");
@@ -157,11 +182,11 @@ public class PlaybackProgressInput {
     }
 
     private boolean validHistoryKey(String key) {
-        return !TextUtils.isEmpty(key) && key.split(AppDatabase.SYMBOL).length >= 2;
+        return !empty(key) && key.split(AppDatabase.SYMBOL).length >= 2;
     }
 
     private static String firstString(String current, JsonObject object, String... keys) {
-        if (!TextUtils.isEmpty(current)) return current;
+        if (!empty(current)) return current;
         for (String key : keys) {
             try {
                 JsonElement value = object.get(key);
@@ -184,6 +209,23 @@ public class PlaybackProgressInput {
         return current;
     }
 
+    private static int firstInt(int current, JsonObject object, String... keys) {
+        if (current > 0) return current;
+        for (String key : keys) {
+            try {
+                JsonElement value = object.get(key);
+                if (value != null && !value.isJsonNull()) return value.getAsInt();
+            } catch (Exception ignored) {
+            }
+        }
+        return current;
+    }
+
+    public boolean hasTmdbEpisodeIdentity() {
+        normalize();
+        return "tv".equals(mediaType) && tmdbId > 0 && seasonNumber >= 0 && episodeNumber > 0;
+    }
+
     private static String part(String key, int index) {
         try {
             String[] parts = safe(key).split(AppDatabase.SYMBOL);
@@ -194,10 +236,14 @@ public class PlaybackProgressInput {
     }
 
     private static String fallback(String value, String fallback) {
-        return TextUtils.isEmpty(value) ? safe(fallback).trim() : value.trim();
+        return empty(value) ? safe(fallback).trim() : value.trim();
     }
 
     private static String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static boolean empty(String value) {
+        return value == null || value.isEmpty();
     }
 }

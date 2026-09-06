@@ -31,6 +31,7 @@ import com.fongmi.android.tv.impl.ParseCallback;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.ui.dialog.WebDialog;
 import com.fongmi.android.tv.utils.RuleIdUtil;
+import com.fongmi.android.tv.utils.WebSniffHeaders;
 import com.fongmi.android.tv.utils.WebViewUtil;
 import com.fongmi.android.tv.utils.Sniffer;
 import com.github.catvod.crawler.Spider;
@@ -55,6 +56,8 @@ public class CustomWebView extends WebView implements DialogInterface.OnDismissL
     private static final int MAX_URLS = 5;
 
     private final AtomicReference<ParseCallback> callbackRef = new AtomicReference<>();
+    /** 调用方指定的嗅探正则（猫源 /msg 的 sniff 会带 rule）；为空时用默认判定。 */
+    private Pattern sniff;
     private LinkedHashSet<String> urls;
     private WebResourceResponse empty;
     private WebDialog dialog;
@@ -113,8 +116,10 @@ public class CustomWebView extends WebView implements DialogInterface.OnDismissL
 
     private void start(Map<String, String> headers) {
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true);
-        checkHeader(url, headers);
-        loadUrl(url, headers);
+        Map<String, String> pageHeaders = WebSniffHeaders.forPage(headers, getSettings().getUserAgentString());
+        checkHeader(url, pageHeaders);
+        SpiderDebug.log("webview-parse", "page headers input=%s applied=%s ua=%s", headers == null ? "[]" : headers.keySet(), pageHeaders.keySet(), getSettings().getUserAgentString());
+        loadUrl(url, pageHeaders);
     }
 
     private void checkHeader(String url, Map<String, String> headers) {
@@ -264,9 +269,16 @@ public class CustomWebView extends WebView implements DialogInterface.OnDismissL
         return false;
     }
 
+    /** 指定自定义嗅探正则，需在 start() 之前调用。 */
+    public CustomWebView sniff(Pattern pattern) {
+        this.sniff = pattern;
+        return this;
+    }
+
     private boolean isVideoFormat(String url) {
         try {
             if (!detect && url.equals(this.url)) return false;
+            if (sniff != null) return sniff.matcher(url).find();
             Spider spider = VodConfig.get().getSite(key).spider();
             if (spider.manualVideoCheck()) return spider.isVideoFormat(url);
             return Sniffer.isVideoFormat(url);

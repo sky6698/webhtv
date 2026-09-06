@@ -84,8 +84,10 @@ public class FileUtil {
         Task.execute(() -> {
             Path.clear(Path.cache());
             AppCache.clearLegacyPreferences();
-            // 清理集数位置缓存
+            // 这两个缓存都是进程内单例：只删文件的话内存 map 还在，
+            // 下一次写入会把整张旧 map 重新落盘，等于没清。
             com.fongmi.android.tv.bean.EpisodePositionCache.get().clear();
+            com.fongmi.android.tv.bean.FlagPreferenceCache.get().clear();
             App.post(callback::success);
         });
     }
@@ -103,17 +105,47 @@ public class FileUtil {
     public static long getDirectorySize(File dir) {
         long size = 0;
         if (dir == null) return 0;
-        if (dir.isDirectory()) for (File file : Path.list(dir)) size += getDirectorySize(file);
+        if (dir.isDirectory()) {
+            for (File file : Path.list(dir)) {
+                long child = getDirectorySize(file);
+                if (size > Long.MAX_VALUE - child) return Long.MAX_VALUE;
+                size += child;
+            }
+        }
         else size = dir.length();
         return size;
     }
 
     public static long getAvailableStorageSpace(File file) {
+        return getStorageSpace(file).availableBytes();
+    }
+
+    public static StorageSpace getStorageSpace(File file) {
         try {
-            StatFs stat = new StatFs(file.getAbsolutePath());
-            return stat.getAvailableBlocksLong() * stat.getBlockSizeLong();
+            File target = existingPath(file);
+            if (target == null) return StorageSpace.unavailable();
+            StatFs stat = new StatFs(target.getAbsolutePath());
+            return StorageSpace.of(stat.getAvailableBytes(), stat.getTotalBytes());
         } catch (Exception e) {
-            return 0;
+            return StorageSpace.unavailable();
+        }
+    }
+
+    private static File existingPath(File file) {
+        File target = file;
+        while (target != null && !target.exists()) target = target.getParentFile();
+        return target;
+    }
+
+    public record StorageSpace(boolean available, long availableBytes, long totalBytes) {
+
+        public static StorageSpace of(long availableBytes, long totalBytes) {
+            boolean valid = availableBytes >= 0 && totalBytes > 0 && availableBytes <= totalBytes;
+            return valid ? new StorageSpace(true, availableBytes, totalBytes) : unavailable();
+        }
+
+        public static StorageSpace unavailable() {
+            return new StorageSpace(false, 0, 0);
         }
     }
 

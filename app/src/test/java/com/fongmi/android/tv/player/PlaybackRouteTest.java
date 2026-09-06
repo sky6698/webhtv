@@ -42,6 +42,19 @@ public class PlaybackRouteTest {
     }
 
     @Test
+    public void classifiesRegisteredMultiThreadProxyAsAppOwned() {
+        try (PlaybackRouteRegistry.Registration proxy = PlaybackRouteRegistry.registerAppService(
+                7790,
+                PlaybackRouteRegistry.AppOwner.MULTI_THREAD_PROXY)) {
+            PlaybackRoute.Resolution resolution = PlaybackRoute.resolve("http://127.0.0.1:7790/v1/stream/opaque");
+
+            assertEquals(PlaybackRoute.APP_LOCAL_SERVICE, resolution.route());
+            assertEquals(PlaybackRoute.Owner.APP_MULTI_THREAD_PROXY, resolution.owner());
+            assertEquals(PlaybackRoute.Confidence.CONFIRMED, resolution.confidence());
+        }
+    }
+
+    @Test
     public void classifiesOtherLoopbackPortAsExternalProxy() {
         PlaybackRoute.Resolution resolution = PlaybackRoute.resolve("http://127.0.0.1:7777/video");
         assertEquals(PlaybackRoute.EXTERNAL_LOOPBACK_PROXY, resolution.route());
@@ -54,6 +67,15 @@ public class PlaybackRouteTest {
     public void classifiesRemoteHttpSeparately() {
         assertEquals(PlaybackRoute.DIRECT_REMOTE_HTTP, PlaybackRoute.classify("https://cdn.example.com/movie.mkv"));
         assertEquals(PlaybackRoute.OTHER, PlaybackRoute.classify("file:///storage/movie.mkv"));
+    }
+
+    @Test
+    public void preservesLegacyRouteWhileExposingLanAndLocalLocationFacts() {
+        PlaybackRoute.Resolution lan = PlaybackRoute.resolve("http://192.168.1.12/movie.mp4");
+        assertEquals(PlaybackRoute.DIRECT_REMOTE_HTTP, lan.route());
+        assertEquals(PlaybackRoute.Location.LAN_PRIVATE, lan.location());
+        assertEquals(PlaybackRoute.Evidence.PRIVATE_HOST, lan.evidence());
+        assertEquals(PlaybackRoute.Location.LOCAL, PlaybackRoute.resolve("file:///storage/movie.mkv").location());
     }
 
     @Test

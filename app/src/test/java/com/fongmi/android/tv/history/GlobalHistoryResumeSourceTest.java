@@ -30,10 +30,75 @@ public class GlobalHistoryResumeSourceTest {
     }
 
     @Test
+    public void directHistoryLaunchPinsClickedRecordAcrossLateTmdbMatch() throws Exception {
+        for (String mode : new String[]{"mobile", "leanback"}) {
+            String source = read("app/src/" + mode + "/java/com/fongmi/android/tv/ui/activity/VideoActivity.java");
+            int reloadStart = source.indexOf("private boolean reloadHistoryAfterTmdbMatch(TmdbItem matched)");
+            int reloadEnd = source.indexOf("private void resumeHistoryAfterTmdbMatch", reloadStart);
+            String reload = source.substring(reloadStart, reloadEnd);
+
+            assertTrue(mode + " history launch must pass the exact clicked record", source.contains("item.getEpisodeUrl(), item)"));
+            assertTrue(mode + " history launch must preserve the source config id", source.contains("intent.putExtra(EXTRA_RESUME_HISTORY_CID, resumeHistory.getCid())"));
+            assertTrue(mode + " history launch must preserve the seasonal source reference", source.contains("intent.putExtra(EXTRA_RESUME_HISTORY_KEY, HistoryResumePayload.encode(resumeHistory))"));
+            assertTrue(mode + " late TMDB matching must not replace an explicit history selection", reload.contains("hasIntentResumeHistory()"));
+            assertFalse(mode + " plain resume requests must still allow late TMDB matching", reload.contains("isResumeFromHistory()"));
+        }
+    }
+
+    @Test
+    public void standaloneDetailHistoryKeepsTheClickedEpisodeIdentity() throws Exception {
+        String detail = read("app/src/main/java/com/fongmi/android/tv/ui/activity/TmdbDetailActivity.java");
+
+        assertTrue(detail.contains("public static void startFromHistory(Activity activity, History item)"));
+        assertTrue(detail.contains("public static void startFromResolvedHistory(Activity activity, History source, Vod target, Flag flag, Episode episode)"));
+        assertTrue(detail.contains("resumeHistory = getIntentResumeHistory();"));
+        assertTrue(detail.contains("resumeHistory.forPlaybackKey(getHistoryKey(), VodConfig.getCid())"));
+        assertTrue(detail.contains("isResumeFromHistory() ? getIntentResumeHistory() : null"));
+    }
+
+    @Test
+    public void historySourceLabelWaitsForVodConfigAndRefreshesWhenReady() throws Exception {
+        String history = read("app/src/main/java/com/fongmi/android/tv/bean/History.java");
+        assertTrue(history.contains("if (getCid() != VodConfig.getCid()) return ResUtil.getString(R.string.history_other_config);"));
+        assertTrue(history.contains("if (VodConfig.get().getSites().isEmpty()) return \"\";"));
+        assertTrue(history.contains("ResUtil.getString(R.string.history_source_unavailable)"));
+
+        for (String mode : new String[]{"mobile", "leanback"}) {
+            String activity = read("app/src/" + mode + "/java/com/fongmi/android/tv/ui/activity/HistoryActivity.java");
+            assertTrue(mode + " history page must observe VOD config completion", activity.contains("public void onConfigEvent(ConfigEvent event)"));
+            assertTrue(mode + " history page must refresh labels only after VOD config events", activity.contains("if (event.isVod() && mAdapter != null) {") && activity.contains("mAdapter.notifyDataSetChanged();"));
+        }
+
+        String defaults = read("app/src/main/res/values/strings.xml");
+        String chinese = read("app/src/main/res/values-zh-rCN/strings.xml");
+        assertTrue(defaults.contains("<string name=\"history_source_unavailable\">Source unavailable</string>"));
+        assertTrue(chinese.contains("<string name=\"history_other_config\">其他配置</string>"));
+        assertTrue(chinese.contains("<string name=\"history_source_unavailable\">接口已失效</string>"));
+    }
+    @Test
     public void resolvedPlaybackPreservesHistoryBackdrop() throws Exception {
         for (String mode : new String[]{"mobile", "leanback"}) {
             String source = read("app/src/" + mode + "/java/com/fongmi/android/tv/ui/activity/VideoActivity.java");
             assertTrue(source.contains("intent.putExtra(\"wallPic\", source.getWallPic())"));
+        }
+    }
+
+    @Test
+    public void resolvedHistoryUsesTheSameDetailModeRoutingAsOrdinaryHistory() throws Exception {
+        for (String mode : new String[]{"mobile", "leanback"}) {
+            String source = read("app/src/" + mode + "/java/com/fongmi/android/tv/ui/activity/VideoActivity.java");
+            int start = source.indexOf("public static void startFromResolvedHistory");
+            int end = source.indexOf("\n    public static", start + 1);
+            String method = source.substring(start, end);
+            String detailGuard = mode.equals("leanback")
+                    ? "shouldOpenLegacyTmdbDetail(target.getSiteKey(), target.getId(), false)"
+                    : "shouldOpenLegacyTmdbDetail(target.getSiteKey(), target.getId())";
+            int guard = method.indexOf(detailGuard);
+            int detailLaunch = method.indexOf("TmdbDetailActivity.startFromResolvedHistory(activity, source, target, flag, episode)");
+            int directLaunch = method.indexOf("new Intent(activity, VideoActivity.class)");
+
+            assertTrue(mode + " resolved history must honor the configured detail mode", guard >= 0);
+            assertTrue(mode + " resolved history must enter the standard detail route before direct playback", detailLaunch > guard && directLaunch > detailLaunch);
         }
     }
 
@@ -61,7 +126,7 @@ public class GlobalHistoryResumeSourceTest {
         assertTrue(coordinator.contains("int targetCid, Vod selected"));
         assertTrue(coordinator.contains("if (VodConfig.getCid() != targetCid)"));
         assertTrue(coordinator.contains("showSearchFallback(activity, current, targetCid)"));
-        assertTrue(coordinator.contains("openSearch(activity, history.getCid(), history.getKey(), targetCid, history.getVodName())"));
+        assertTrue(coordinator.contains("openSearch(activity, history.getCid(), HistoryResumePayload.encode(history), targetCid, history.getVodName())"));
 
         for (String path : new String[]{
                 "app/src/mobile/java/com/fongmi/android/tv/ui/fragment/CollectFragment.java",
@@ -136,9 +201,38 @@ public class GlobalHistoryResumeSourceTest {
     public void resolvedPlaybackReloadsHistoryBeforeLaunching() throws Exception {
         String source = read("app/src/main/java/com/fongmi/android/tv/ui/activity/HistoryResumeCoordinator.java");
 
-        assertTrue(source.contains("History current = History.find(history.getCid(), history.getKey())"));
+        assertTrue(source.contains("History current = HistoryResumePayload.restore"));
         assertTrue(source.contains("VideoActivity.startFromResolvedHistory(activity, current"));
         assertTrue(source.contains("Notify.show(R.string.history_record_missing)"));
+    }
+
+    @Test
+    public void quarterlyResumeReferenceSurvivesDirectAndSearchLaunches() throws Exception {
+        String coordinator = read("app/src/main/java/com/fongmi/android/tv/ui/activity/HistoryResumeCoordinator.java");
+        String detail = read("app/src/main/java/com/fongmi/android/tv/ui/activity/TmdbDetailActivity.java");
+        String mobileSearch = read("app/src/mobile/java/com/fongmi/android/tv/ui/activity/SearchActivity.java");
+        String leanbackSearch = read("app/src/leanback/java/com/fongmi/android/tv/ui/activity/CollectActivity.java");
+
+        assertTrue(coordinator.contains("HistoryResumePayload.restore(sourceCid, sourceKey)"));
+        assertTrue(coordinator.contains("HistoryResumePayload.restore(history.getCid(), resumePayload)"));
+        assertTrue(detail.contains("HistoryResumePayload.restore("));
+        assertTrue(mobileSearch.contains("HistoryResumePayload.encode(history)"));
+        assertTrue(leanbackSearch.contains("HistoryResumePayload.encode(history)"));
+        for (String mode : new String[]{"mobile", "leanback"}) {
+            String player = read("app/src/" + mode + "/java/com/fongmi/android/tv/ui/activity/VideoActivity.java");
+            assertTrue(player.contains("HistoryResumePayload.restore("));
+            assertTrue(player.contains("EXTRA_TMDB_PLAY_FLAG_KEY"));
+            assertTrue(player.contains("TmdbUIAdapter.selectPlaybackFlag"));
+        }
+    }
+
+    @Test
+    public void asynchronousSourceResolutionNeverCombinesOldEpisodeWithNewProgress() throws Exception {
+        String coordinator = read("app/src/main/java/com/fongmi/android/tv/ui/activity/HistoryResumeCoordinator.java");
+
+        assertTrue(coordinator.contains("if (!isSameResumeVersion(history, current))"));
+        assertTrue(coordinator.contains("openSelected(activity, sourceCid, sourceKey, targetCid, selected);"));
+        assertTrue(coordinator.contains("resolveAuto(activity, current);"));
     }
 
     @Test
@@ -191,8 +285,19 @@ public class GlobalHistoryResumeSourceTest {
         int end = source.indexOf("private static void notifyChanged()", start);
         String method = source.substring(start, end);
 
-        assertTrue(method.contains("if (!identity.isEmpty() && Setting.isHistoryAggregationEffective())"));
+        assertTrue(method.contains("if (!identity.isEmpty() && !identity.startsWith(\"source:\") && Setting.isHistoryAggregationEffective())"));
         assertFalse(method.contains("findByTmdbId(getCid(), getTmdbId())"));
+    }
+
+    @Test
+    public void seasonAwareDeletionDoesNotFanOutToOtherSeasons() throws Exception {
+        String source = read("app/src/main/java/com/fongmi/android/tv/bean/History.java");
+        int start = source.indexOf("private History deleteRelated(boolean global)");
+        int end = source.indexOf("private static void notifyChanged()", start);
+        String method = source.substring(start, end);
+
+        assertTrue("season-aware history deletion must retain the exact display identity",
+                method.contains("identity.equals(HistoryDisplayPolicy.tmdbIdentity(item))"));
     }
 
     @Test
@@ -207,6 +312,17 @@ public class GlobalHistoryResumeSourceTest {
     }
 
     @Test
+    public void exactKeyPlaybackHistoryUsesCurrentRouteRebinding() throws Exception {
+        String source = read("app/src/main/java/com/fongmi/android/tv/bean/History.java");
+        int start = source.indexOf("private static History findPlayback(String key, List<String> vodNames");
+        int end = source.indexOf("private static History findPlaybackByTmdb", start);
+        String method = source.substring(start, end);
+
+        assertTrue(method.contains("return copyForPlaybackKey(history, key, flags, history);"));
+        assertFalse(method.contains("if (isSeasonEligible(history, key, expectedSeason)) return history;"));
+    }
+
+    @Test
     public void globalClearOnlyDeletesTracksOwnedByHistoryRecords() throws Exception {
         String source = read("app/src/main/java/com/fongmi/android/tv/bean/History.java");
         int start = source.indexOf("public static void deleteForDisplay()");
@@ -214,7 +330,8 @@ public class GlobalHistoryResumeSourceTest {
         String method = source.substring(start, end);
 
         assertTrue(method.contains("getHistoryDao().findAll()"));
-        assertTrue(method.contains("getTrackDao().delete(item.getKey())"));
+        assertTrue(method.contains("PlaybackProgressWriter.deleteAllFromUser(cid)"));
+        assertFalse(method.contains("getTrackDao().delete(item.getKey())"));
         assertFalse(method.contains("getTrackDao().deleteAll()"));
     }
 

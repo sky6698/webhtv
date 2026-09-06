@@ -9,12 +9,14 @@ import com.fongmi.android.tv.bean.TmdbConfig;
 import com.fongmi.android.tv.bean.TmdbEpisode;
 import com.fongmi.android.tv.bean.TmdbItem;
 import com.fongmi.android.tv.bean.TmdbPerson;
+import com.fongmi.android.tv.bean.TmdbVideo;
 import com.fongmi.android.tv.utils.TmdbImageSelector;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.utils.Path;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -28,6 +30,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.HttpUrl;
@@ -41,14 +45,32 @@ public class TmdbService {
     private static final long SEARCH_CACHE_TTL = DAY;
     private static final long PERSON_CACHE_TTL = DAY * 7;
     private static final long SEASON_CACHE_TTL = DAY * 3;
+    private static final long VIDEO_CACHE_TTL = TimeUnit.HOURS.toMillis(6);
+    private static final long VIDEO_EMPTY_CACHE_TTL = TimeUnit.MINUTES.toMillis(30);
     private static final long CN_ON_AIR_SEASON_CACHE_TTL = DAY;
+    private static final long AUTH_FAILURE_COOLDOWN = TimeUnit.MINUTES.toMillis(5);
+    private static final Map<String, Long> AUTH_FAILURE_BLOCKS = new ConcurrentHashMap<>();
+
+    public static final class AuthException extends IllegalStateException {
+
+        private final int statusCode;
+
+        public AuthException(int statusCode, String message) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+    }
 
     public JsonObject configuration(@NonNull TmdbConfig config) throws Exception {
         ensureReady(config);
         HttpUrl url = apiBuilder(config.getApiBase() + "/configuration", config).build();
         try (Response response = execute(url.toString(), config)) {
+            if (!response.isSuccessful()) throw httpFailure(config, response.code(), "TMDB configuration failed: HTTP " + response.code());
             if (response.body() == null) throw new IllegalStateException("TMDB configuration returned empty");
-            if (!response.isSuccessful()) throw new IllegalStateException("TMDB configuration failed: HTTP " + response.code());
             try {
                 return App.gson().fromJson(response.body().string(), JsonObject.class);
             } catch (ClassCastException e) {
@@ -334,6 +356,13 @@ public class TmdbService {
         return TmdbImageSelector.backgrounds(detail, config.getImageBase(), config.getBackdropBase(), preferLandscape, 24);
     }
 
+    public List<String> backdrops(JsonObject detail, @NonNull TmdbConfig config) {
+        return TmdbImageSelector.backdrops(detail, config.getBackdropBase(), 24);
+    }
+
+    public List<String> posters(JsonObject detail, @NonNull TmdbConfig config) {
+        return TmdbImageSelector.posters(detail, config.getImageBase(), 24);
+    }
     public List<String> seasonPhotos(JsonObject season, @NonNull TmdbConfig config) {
         return photos(season, config);
     }
@@ -406,6 +435,83 @@ public class TmdbService {
         return items;
     }
 
+    public List<TmdbVideo> movieVideos(@NonNull TmdbItem item, @NonNull TmdbConfig config) throws Exception {
+        if (!"movie".equals(normalizeMediaType(item.getMediaType())) || item.getTmdbId() <= 0) return new ArrayList<>();
+        return requestVideos(item, "/movie/" + item.getTmdbId() + "/videos", TmdbVideo.Scope.TITLE, -1, -1, config);
+    }
+
+    public List<TmdbVideo> seriesVideos(@NonNull TmdbItem item, @NonNull TmdbConfig config) throws Exception {
+        if (!"tv".equals(normalizeMediaType(item.getMediaType())) || item.getTmdbId() <= 0) return new ArrayList<>();
+        return requestVideos(item, "/tv/" + item.getTmdbId() + "/videos", TmdbVideo.Scope.TITLE, -1, -1, config);
+    }
+
+    public List<TmdbVideo> seasonVideos(@NonNull TmdbItem item, int seasonNumber, @NonNull TmdbConfig config) throws Exception {
+        if (!"tv".equals(normalizeMediaType(item.getMediaType())) || item.getTmdbId() <= 0 || seasonNumber < 0) return new ArrayList<>();
+        String path = "/tv/" + item.getTmdbId() + "/season/" + seasonNumber + "/videos";
+        return requestVideos(item, path, TmdbVideo.Scope.SEASON, seasonNumber, -1, config);
+    }
+
+    public List<TmdbVideo> episodeVideos(@NonNull TmdbItem item, int seasonNumber, int episodeNumber, @NonNull TmdbConfig config) throws Exception {
+        if (!"tv".equals(normalizeMediaType(item.getMediaType())) || item.getTmdbId() <= 0 || seasonNumber < 0 || episodeNumber <= 0) return new ArrayList<>();
+        String path = "/tv/" + item.getTmdbId() + "/season/" + seasonNumber + "/episode/" + episodeNumber + "/videos";
+        return requestVideos(item, path, TmdbVideo.Scope.EPISODE, seasonNumber, episodeNumber, config);
+    }
+
+    public List<TmdbVideo> relatedVideos(@NonNull TmdbItem item, int seasonNumber, int episodeNumber, @NonNull TmdbConfig config) {
+        List<TmdbVideo> values = new ArrayList<>();
+        String mediaType = normalizeMediaType(item.getMediaType());
+        if ("movie".equals(mediaType)) {
+            addVideos(values, () -> movieVideos(item, config), "title", item);
+        } else if ("tv".equals(mediaType)) {
+            if (seasonNumber >= 0 && episodeNumber > 0) addVideos(values, () -> episodeVideos(item, seasonNumber, episodeNumber, config), "episode", item);
+            if (seasonNumber >= 0) addVideos(values, () -> seasonVideos(item, seasonNumber, config), "season", item);
+            addVideos(values, () -> seriesVideos(item, config), "series", item);
+        }
+        return TmdbVideo.mergeAndRank(values, config.getLanguage(), 12);
+    }
+
+    private List<TmdbVideo> requestVideos(TmdbItem item, String path, TmdbVideo.Scope scope, int seasonNumber, int episodeNumber, TmdbConfig config) throws Exception {
+        ensureReady(config);
+        HttpUrl url = apiBuilder(config.getApiBase() + path, config)
+                .addQueryParameter("language", config.getLanguage())
+                .addQueryParameter("include_video_language", videoLanguages(config))
+                .build();
+        String cacheKey = videoCacheKey(item, scope, seasonNumber, episodeNumber, config);
+        JsonObject body = requestVideoJson(url.toString(), config, cacheKey);
+        List<TmdbVideo> values = new ArrayList<>();
+        for (JsonElement element : array(body, "results")) {
+            if (!element.isJsonObject()) continue;
+            TmdbVideo video = TmdbVideo.from(element.getAsJsonObject(), scope, seasonNumber, episodeNumber);
+            if (video != null) values.add(video);
+        }
+        return values;
+    }
+
+    private void addVideos(List<TmdbVideo> target, VideoRequest request, String scope, TmdbItem item) {
+        try {
+            target.addAll(request.load());
+        } catch (CancellationException e) {
+            throw e;
+        } catch (Throwable e) {
+            SpiderDebug.log("tmdb-video", "scope=%s tmdb=%d failed error=%s", scope, item.getTmdbId(), e.getMessage());
+        }
+    }
+
+    private String videoLanguages(TmdbConfig config) {
+        List<String> languages = new ArrayList<>();
+        String language = cacheLanguage(config);
+        String root = languageRoot(language);
+        if (!TextUtils.isEmpty(language)) languages.add(language);
+        if (!TextUtils.isEmpty(root) && !languages.contains(root)) languages.add(root);
+        if (!languages.contains("en")) languages.add("en");
+        languages.add("null");
+        return String.join(",", languages);
+    }
+
+    @FunctionalInterface
+    private interface VideoRequest {
+        List<TmdbVideo> load() throws Exception;
+    }
     public List<TmdbItem> recommendations(JsonObject detail, @NonNull TmdbConfig config) {
         return items(array(detail, "recommendations", "results"), config, inferMediaType(detail));
     }
@@ -487,12 +593,84 @@ public class TmdbService {
         return builder;
     }
 
+    void throwIfAuthBlocked(TmdbConfig config) {
+        if (Thread.currentThread().isInterrupted()) throw new CancellationException("TMDB request cancelled");
+        String key = authCircuitKey(config);
+        Long blockedUntil = AUTH_FAILURE_BLOCKS.get(key);
+        if (blockedUntil == null) return;
+        long now = System.currentTimeMillis();
+        if (blockedUntil <= now) {
+            AUTH_FAILURE_BLOCKS.remove(key, blockedUntil);
+            return;
+        }
+        throw new AuthException(401, "TMDB authentication temporarily blocked after HTTP 401/403");
+    }
+
+    RuntimeException httpFailure(TmdbConfig config, int statusCode, String message) {
+        if (statusCode == 401 || statusCode == 403) {
+            AUTH_FAILURE_BLOCKS.put(authCircuitKey(config), System.currentTimeMillis() + AUTH_FAILURE_COOLDOWN);
+            SpiderDebug.log("tmdb", "authentication circuit opened status=%d cooldown=%dms", statusCode, AUTH_FAILURE_COOLDOWN);
+            return new AuthException(statusCode, message);
+        }
+        return new IllegalStateException(message);
+    }
+
+    static void clearAuthFailuresForTest() {
+        AUTH_FAILURE_BLOCKS.clear();
+    }
+
+    private String authCircuitKey(TmdbConfig config) {
+        String apiBase = config == null ? "" : config.getApiBase();
+        String apiKey = config == null ? "" : config.getApiKey();
+        String accessToken = config == null ? "" : config.getAccessToken();
+        return md5(apiBase + "|" + apiKey + "|" + accessToken);
+    }
+
     private Response execute(String url, TmdbConfig config) throws Exception {
+        throwIfAuthBlocked(config);
         Request.Builder builder = new Request.Builder().url(url);
         if (!TextUtils.isEmpty(config.getAccessToken())) builder.header("Authorization", "Bearer " + config.getAccessToken());
         return com.github.catvod.net.OkHttp.client().newCall(builder.build()).execute();
     }
 
+    private JsonObject requestVideoJson(String url, TmdbConfig config, String cacheKey) throws Exception {
+        long start = System.currentTimeMillis();
+        File file = cacheFile("videos", cacheKey);
+        List<File> lookupFiles = cacheFiles("videos", cacheKey, Collections.emptyList(), url);
+        JsonObject cached = readFreshVideoCache(lookupFiles);
+        if (cached != null) {
+            SpiderDebug.log("tmdb-video", "source=cache cost=%dms", System.currentTimeMillis() - start);
+            return cached;
+        }
+        try (Response response = execute(url, config)) {
+            if (!response.isSuccessful()) throw httpFailure(config, response.code(), "TMDB 视频失败: HTTP " + response.code());
+            if (response.body() == null) throw new IllegalStateException("TMDB 视频返回为空");
+            String body = response.body().string();
+            JsonElement parsed = JsonParser.parseString(body);
+            JsonObject object = parsed != null && parsed.isJsonObject() ? parsed.getAsJsonObject() : null;
+            if (object == null) throw new IllegalStateException("TMDB 视频返回为空");
+            writeCache(file, body);
+            SpiderDebug.log("tmdb-video", "source=network count=%d cost=%dms", array(object, "results").size(), System.currentTimeMillis() - start);
+            return object;
+        } catch (Throwable e) {
+            cached = readFirstCache(lookupFiles, Long.MAX_VALUE);
+            if (cached != null) {
+                SpiderDebug.log("tmdb-video", "source=stale-cache cost=%dms error=%s", System.currentTimeMillis() - start, e.getMessage());
+                return cached;
+            }
+            throw e;
+        }
+    }
+
+    private JsonObject readFreshVideoCache(List<File> files) {
+        for (File file : files) {
+            JsonObject cached = readCache(file, Long.MAX_VALUE);
+            if (cached == null) continue;
+            long ttl = array(cached, "results").isEmpty() ? VIDEO_EMPTY_CACHE_TTL : VIDEO_CACHE_TTL;
+            if (System.currentTimeMillis() - file.lastModified() <= ttl) return cached;
+        }
+        return null;
+    }
     private JsonObject requestJson(String url, TmdbConfig config, String type, long ttl, String emptyMessage, String failurePrefix) throws Exception {
         return requestJson(url, config, type, ttl, emptyMessage, failurePrefix, false);
     }
@@ -519,8 +697,8 @@ public class TmdbService {
             return cached;
         }
         try (Response response = execute(url, config)) {
+            if (!response.isSuccessful()) throw httpFailure(config, response.code(), failurePrefix + response.code());
             if (response.body() == null) throw new IllegalStateException(emptyMessage);
-            if (!response.isSuccessful()) throw new IllegalStateException(failurePrefix + response.code());
             String body = response.body().string();
             JsonObject object;
             try {
@@ -572,9 +750,16 @@ public class TmdbService {
     }
 
     private File cacheFile(String type, String key) {
-        File dir = new File(Path.cache(), "tmdb");
-        if (!dir.exists()) dir.mkdirs();
-        return new File(dir, type + "_" + md5(key) + ".json");
+        try {
+            File root = Path.cache();
+            if (root == null) return null;
+            File dir = new File(root, "tmdb");
+            if (!dir.exists()) dir.mkdirs();
+            return new File(dir, type + "_" + md5(key) + ".json");
+        } catch (Throwable e) {
+            SpiderDebug.log("TmdbService", "TMDB cache unavailable: " + e.getMessage());
+            return null;
+        }
     }
 
     private JsonObject readCache(File file, long ttl) {
@@ -623,6 +808,9 @@ public class TmdbService {
         return keys;
     }
 
+    String videoCacheKey(@NonNull TmdbItem item, @NonNull TmdbVideo.Scope scope, int seasonNumber, int episodeNumber, @NonNull TmdbConfig config) {
+        return cacheKey("videos", item.getMediaType(), item.getTmdbId(), scope.name(), seasonNumber, episodeNumber, cacheLanguage(config));
+    }
     String seasonCacheKey(@NonNull TmdbItem item, int seasonNumber, @NonNull TmdbConfig config) {
         return seasonCacheKey(item.getTmdbId(), seasonNumber, config);
     }

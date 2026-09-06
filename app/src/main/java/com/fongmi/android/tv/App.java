@@ -15,13 +15,18 @@ import androidx.annotation.Nullable;
 import androidx.core.os.HandlerCompat;
 
 import com.fongmi.android.tv.server.Server;
+import com.fongmi.android.tv.server.proxy.MultiThreadProxy;
 import com.fongmi.android.tv.playback.PlaybackRemoteSyncer;
+import com.fongmi.android.tv.player.PlaybackMemoryMonitor;
+import com.fongmi.android.tv.player.PlaybackSystemConditionMonitor;
 import com.fongmi.android.tv.remote.RemoteAgent;
+import com.fongmi.android.tv.setting.AppBranding;
 import com.fongmi.android.tv.setting.ProxySetting;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.utils.DanmakuSearchListFocusFixer;
 import com.fongmi.android.tv.utils.NsdDeviceDiscovery;
 import com.fongmi.android.tv.utils.Notify;
+import com.fongmi.android.tv.utils.PreviousProcessExitLogger;
 import com.fongmi.android.tv.utils.WebViewDataDirectoryGuard;
 import com.fongmi.hook.Hook;
 import com.github.catvod.crawler.DebugLogStore;
@@ -99,9 +104,15 @@ public class App extends Application implements Application.ActivityLifecycleCal
     @Override
     public void onCreate() {
         super.onCreate();
+        PlaybackMemoryMonitor.process().initialize(this);
+        PlaybackSystemConditionMonitor.process().initialize(this);
         Setting.applyLanguage();
+        AppBranding.applyLauncherIcon(this);
         DebugLogStore.restoreEnabled();
-        if (DebugLogStore.isEnabled()) Setting.logDebugEnvironment("restore");
+        if (DebugLogStore.isEnabled()) {
+            Setting.logDebugEnvironment("restore");
+            PreviousProcessExitLogger.log(this);
+        }
         Notify.createChannel();
         ProxySetting.apply();
         registerActivityLifecycleCallbacks(this);
@@ -110,16 +121,53 @@ public class App extends Application implements Application.ActivityLifecycleCal
     }
 
     private void registerContentHandlers() {
+        // 猫源动作项排最前：它的判定最便宜（只比字符串），且命中就该直接开网页，
+        // 不该让音频/阅读器 handler 先按站点规则把它认走
+        com.fongmi.android.tv.content.ContentDispatcher.registerHandler(new com.fongmi.android.tv.content.CatActionContentHandler());
         com.fongmi.android.tv.content.ContentDispatcher.registerHandler(new com.fongmi.android.tv.content.AudioContentHandler());
+        com.fongmi.android.tv.content.ContentDispatcher.registerHandler(new com.fongmi.android.tv.content.ReaderContentHandler());
+        registerReaderFallback();
+    }
+
+    private void registerReaderFallback() {
+        Product.registerReaderFallback();
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        PlaybackMemoryMonitor.process().onTrimMemory(level);
+        super.onTrimMemory(level);
+    }
+
+    @Override
+    public void onLowMemory() {
+        PlaybackMemoryMonitor.process().onLowMemory();
+        super.onLowMemory();
     }
 
     private void startBackgroundServicesNow() {
         SpiderDebug.log("startup", "background services start cost=%sms", System.currentTimeMillis() - time);
         Server.get().start();
+        startMultiThreadProxy();
         PlaybackRemoteSyncer.start();
         RemoteAgent.get().start();
         NsdDeviceDiscovery.register();
+        com.fongmi.android.tv.lab.LabAutoStart.start(this);
         SpiderDebug.log("startup", "background services ready cost=%sms", System.currentTimeMillis() - time);
+    }
+
+    private void startMultiThreadProxy() {
+        try {
+            var snapshot = MultiThreadProxy.applyStored();
+            SpiderDebug.log("proxy",
+                    "multi-thread proxy enabled=%s ready=%s port=%s revision=%s",
+                    snapshot.config().enabled(),
+                    snapshot.ready(),
+                    snapshot.actualPort(),
+                    snapshot.configRevision());
+        } catch (Exception e) {
+            SpiderDebug.log("proxy", "multi-thread proxy start failed error=%s", e.getMessage());
+        }
     }
 
     public static void resumeBackgroundServices() {
@@ -131,6 +179,7 @@ public class App extends Application implements Application.ActivityLifecycleCal
     public static void stopBackgroundServices() {
         removeCallbacks(get().backgroundServicesStarter);
         DanmakuSearchListFocusFixer.stop();
+        MultiThreadProxy.stop();
         PlaybackRemoteSyncer.stop();
         RemoteAgent.get().stop();
         NsdDeviceDiscovery.unregister();

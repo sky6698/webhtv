@@ -13,6 +13,8 @@ public final class MpvPlayerConfig {
 
     public static final long DEFAULT_DEMUXER_BYTES = 64L * 1024L * 1024L;
     public static final int DEFAULT_CACHE_SECONDS = 20;
+    public static final int DEFAULT_DEMUXER_READAHEAD_SECONDS = 1;
+    public static final int DEFAULT_DEMUXER_HYSTERESIS_SECONDS = 0;
 
     private final File configDir;
     private final File cacheDir;
@@ -33,8 +35,12 @@ public final class MpvPlayerConfig {
     private final long demuxerMaxBackBytes;
     private final int cacheSeconds;
     private final int demuxerReadaheadSeconds;
+    private final int demuxerHysteresisSeconds;
     private final int rebufferMs;
     private final boolean performanceOptionsPriority;
+    private final boolean automaticCacheTime;
+    private final boolean automaticHlsVariant;
+    private final boolean deferStartupTrackRefresh;
     private final Map<String, String> extraOptions;
 
     private MpvPlayerConfig(Builder builder) {
@@ -57,8 +63,12 @@ public final class MpvPlayerConfig {
         demuxerMaxBackBytes = builder.demuxerMaxBackBytes;
         cacheSeconds = builder.cacheSeconds;
         demuxerReadaheadSeconds = builder.demuxerReadaheadSeconds;
+        demuxerHysteresisSeconds = builder.demuxerHysteresisSeconds;
         rebufferMs = builder.rebufferMs;
         performanceOptionsPriority = builder.performanceOptionsPriority;
+        automaticCacheTime = builder.automaticCacheTime;
+        automaticHlsVariant = builder.automaticHlsVariant;
+        deferStartupTrackRefresh = builder.deferStartupTrackRefresh;
         extraOptions = Collections.unmodifiableMap(new LinkedHashMap<>(builder.extraOptions));
     }
 
@@ -144,12 +154,28 @@ public final class MpvPlayerConfig {
         return demuxerReadaheadSeconds;
     }
 
+    public int demuxerHysteresisSeconds() {
+        return demuxerHysteresisSeconds;
+    }
+
     public int rebufferMs() {
         return rebufferMs;
     }
 
     public boolean performanceOptionsPriority() {
         return performanceOptionsPriority;
+    }
+
+    public boolean automaticCacheTime() {
+        return automaticCacheTime;
+    }
+
+    public boolean automaticHlsVariant() {
+        return automaticHlsVariant;
+    }
+
+    public boolean deferStartupTrackRefresh() {
+        return deferStartupTrackRefresh;
     }
 
     public Map<String, String> extraOptions() {
@@ -177,9 +203,13 @@ public final class MpvPlayerConfig {
         private long demuxerMaxBytes = DEFAULT_DEMUXER_BYTES;
         private long demuxerMaxBackBytes = DEFAULT_DEMUXER_BYTES;
         private int cacheSeconds = DEFAULT_CACHE_SECONDS;
-        private int demuxerReadaheadSeconds = DEFAULT_CACHE_SECONDS;
+        private int demuxerReadaheadSeconds = DEFAULT_DEMUXER_READAHEAD_SECONDS;
+        private int demuxerHysteresisSeconds = DEFAULT_DEMUXER_HYSTERESIS_SECONDS;
         private int rebufferMs = 5_000;
         private boolean performanceOptionsPriority = true;
+        private boolean automaticCacheTime;
+        private boolean automaticHlsVariant;
+        private boolean deferStartupTrackRefresh;
 
         private Builder(Context context) {
             Context app = context.getApplicationContext();
@@ -283,6 +313,11 @@ public final class MpvPlayerConfig {
             return this;
         }
 
+        public Builder demuxerHysteresisSeconds(int demuxerHysteresisSeconds) {
+            this.demuxerHysteresisSeconds = demuxerHysteresisSeconds;
+            return this;
+        }
+
         public Builder rebufferMs(int rebufferMs) {
             this.rebufferMs = Math.max(0, rebufferMs);
             return this;
@@ -290,6 +325,21 @@ public final class MpvPlayerConfig {
 
         public Builder performanceOptionsPriority(boolean performanceOptionsPriority) {
             this.performanceOptionsPriority = performanceOptionsPriority;
+            return this;
+        }
+
+        public Builder automaticCacheTime(boolean automaticCacheTime) {
+            this.automaticCacheTime = automaticCacheTime;
+            return this;
+        }
+
+        public Builder automaticHlsVariant(boolean automaticHlsVariant) {
+            this.automaticHlsVariant = automaticHlsVariant;
+            return this;
+        }
+
+        public Builder deferStartupTrackRefresh(boolean deferStartupTrackRefresh) {
+            this.deferStartupTrackRefresh = deferStartupTrackRefresh;
             return this;
         }
 

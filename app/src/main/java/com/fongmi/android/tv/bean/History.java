@@ -8,9 +8,11 @@ import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.room.ColumnInfo;
 import androidx.room.Entity;
+import androidx.room.Ignore;
 import androidx.room.PrimaryKey;
 
 import com.fongmi.android.tv.App;
+import com.fongmi.android.tv.Constant;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.api.SiteApi;
 import com.fongmi.android.tv.api.config.VodConfig;
@@ -19,6 +21,9 @@ import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.impl.Diffable;
 import com.fongmi.android.tv.history.HistoryDisplayPolicy;
 import com.fongmi.android.tv.player.VideoAspectMode;
+import com.fongmi.android.tv.playback.PlaybackProgressWriter;
+import com.fongmi.android.tv.playback.PlaybackDeleteTombstoneStore;
+import com.fongmi.android.tv.playback.TmdbSeasonProgressStore;
 import com.fongmi.android.tv.setting.PlayerSetting;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.utils.ResUtil;
@@ -29,9 +34,11 @@ import com.google.gson.reflect.TypeToken;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 @Entity
@@ -41,6 +48,7 @@ public class History implements Diffable<History> {
     private static final Runnable HISTORY_REFRESH = RefreshEvent::history;
     private static final long NEAR_END_MIN_MS = TimeUnit.SECONDS.toMillis(5);
     private static final long NEAR_END_MAX_MS = TimeUnit.SECONDS.toMillis(30);
+    private static final long ENDING_MIN_PLAYED_MS = TimeUnit.MINUTES.toMillis(1);
 
     @NonNull
     @PrimaryKey
@@ -107,9 +115,15 @@ public class History implements Diffable<History> {
     @ColumnInfo(defaultValue = "0")
     private int tmdbEpisodeNumber;
 
-    private transient int player = PlayerSetting.NONE;
+    @SerializedName("player")
+    @ColumnInfo(defaultValue = "-1")
+    private int player = PlayerSetting.NONE;
     private transient long updateTime;
     private transient String playbackSourceKey;
+    @Ignore
+    private transient String sourceBindingKey;
+    @Ignore
+    private transient String displayIdentity;
 
     public History() {
         this.speed = 1;
@@ -153,6 +167,8 @@ public class History implements Diffable<History> {
         item.player = player;
         item.updateTime = updateTime;
         item.playbackSourceKey = playbackSourceKey;
+        item.sourceBindingKey = sourceBindingKey;
+        item.displayIdentity = displayIdentity;
         return item;
     }
 
@@ -172,16 +188,21 @@ public class History implements Diffable<History> {
 
     public static List<History> getForDisplay() {
         if (!Setting.isGlobalHistoryEnabled()) return get();
-        return HistoryDisplayPolicy.project(AppDatabase.get().getHistoryDao().findAll(), Setting.isHistoryAggregationEffective());
+        boolean aggregate = Setting.isHistoryAggregationEffective();
+        return HistoryDisplayPolicy.project(AppDatabase.get().getHistoryDao().findAll(),
+                aggregate ? AppDatabase.get().getTmdbSeasonProgressDao().findAll() : Collections.emptyList(), aggregate);
     }
 
     public static List<History> getAll() {
-        return HistoryDisplayPolicy.project(AppDatabase.get().getHistoryDao().findAll(), Setting.isHistoryAggregationEffective());
+        boolean aggregate = Setting.isHistoryAggregationEffective();
+        return HistoryDisplayPolicy.project(AppDatabase.get().getHistoryDao().findAll(),
+                aggregate ? AppDatabase.get().getTmdbSeasonProgressDao().findAll() : Collections.emptyList(), aggregate);
     }
 
     public static List<History> get(int cid) {
         List<History> items = AppDatabase.get().getHistoryDao().find(cid);
-        return Setting.isHistoryAggregationEffective() ? HistoryDisplayPolicy.project(items, true) : items;
+        if (!Setting.isHistoryAggregationEffective()) return items;
+        return HistoryDisplayPolicy.project(items, AppDatabase.get().getTmdbSeasonProgressDao().findAll(cid), true);
     }
 
     public static History find(String key) {
@@ -223,7 +244,7 @@ public class History implements Diffable<History> {
         History aggregated = findPlaybackByTmdb(key, vodNames, flags, explicitTmdbId, explicitMediaType, expectedSeason);
         if (aggregated != null) return aggregated;
         History history = find(key);
-        if (isSeasonEligible(history, key, expectedSeason)) return history;
+        if (isSeasonEligible(history, key, expectedSeason)) return copyForPlaybackKey(history, key, flags, history);
         if (vodNames != null) {
             for (String vodName : vodNames) {
                 if (vodName == null || vodName.isEmpty()) continue;
@@ -248,10 +269,68 @@ public class History implements Diffable<History> {
         if (identity == null) return null;
         List<History> list = AppDatabase.get().getHistoryDao().findByTmdbIdentity(VodConfig.getCid(), identity.mediaType(), identity.tmdbId());
         if (list.isEmpty()) return null;
+        if ("tv".equals(identity.mediaType())) {
+            if (expectedSeason >= 0) {
+                TmdbSeasonProgress progress = TmdbSeasonProgressStore.find(
+                        VodConfig.getCid(), identity.mediaType(), identity.tmdbId(), expectedSeason);
+                list = overlaySeasonProgress(list, progress);
+            } else {
+                int localSeason = knownSeasonForRoute(key, list);
+                if (localSeason >= 0) {
+                    TmdbSeasonProgress progress = TmdbSeasonProgressStore.find(
+                            VodConfig.getCid(), identity.mediaType(), identity.tmdbId(), localSeason);
+                    list = overlayLocalSeasonProgress(key, list, progress);
+                }
+            }
+        }
         // 整剧级统一进度：不再因当前 key 命中自身记录就直接返回该源旧进度，
         // 统一交给 findPlaybackCandidate 在全部同剧记录中选「最近可续播」的那条
         // （list 已按 createTime DESC 排序），使回到任一源都续到全剧最新进度。
         return findPlaybackCandidate(key, list, flags, expectedSeason);
+    }
+
+    static List<History> overlaySeasonProgress(List<History> histories, TmdbSeasonProgress progress) {
+        if (histories == null || histories.isEmpty() || progress == null
+                || progress.episodeNumber <= 0 || progress.seasonNumber < 0
+                || TextUtils.isEmpty(progress.sourceHistoryKey)) return histories;
+        History source = null;
+        for (History history : histories) {
+            if (history != null && TextUtils.equals(history.getKey(), progress.sourceHistoryKey)) {
+                source = history;
+                break;
+            }
+        }
+        if (source == null || source.getCid() != progress.cid || source.getTmdbId() != progress.tmdbId
+                || !normalizeMediaType(source.getMediaType()).equals(normalizeMediaType(progress.mediaType))) return histories;
+        History snapshot = source.copy();
+        TmdbSeasonProgressStore.apply(snapshot, progress);
+        List<History> result = new ArrayList<>(histories.size() + 1);
+        result.add(snapshot);
+        result.addAll(histories);
+        return result;
+    }
+
+    static List<History> overlayLocalSeasonProgress(
+            String key, List<History> histories, TmdbSeasonProgress progress) {
+        if (histories == null || histories.isEmpty() || progress == null
+                || !TextUtils.equals(key, progress.sourceHistoryKey)) return histories;
+        for (History history : histories) {
+            if (history == null || !TextUtils.equals(key, history.getKey())) continue;
+            if (history.getTmdbEpisodeNumber() <= 0
+                    || history.getTmdbSeasonNumber() != progress.seasonNumber) return histories;
+            return overlaySeasonProgress(histories, progress);
+        }
+        return histories;
+    }
+
+    private static int knownSeasonForRoute(String key, List<History> histories) {
+        if (TextUtils.isEmpty(key) || histories == null) return -1;
+        for (History history : histories) {
+            if (history != null && TextUtils.equals(key, history.getKey())
+                    && history.getTmdbEpisodeNumber() > 0
+                    && history.getTmdbSeasonNumber() >= 0) return history.getTmdbSeasonNumber();
+        }
+        return -1;
     }
 
     /**
@@ -305,18 +384,29 @@ public class History implements Diffable<History> {
     }
 
     public static void delete(int cid) {
-        if (AppDatabase.get().getHistoryDao().delete(cid) > 0) notifyChanged();
+        int deleted = AppDatabase.get().getHistoryDao().delete(cid);
+        AppDatabase.get().getTmdbSeasonProgressDao().deleteByCid(cid);
+        if (deleted > 0) notifyChanged();
     }
 
     public static void deleteForDisplay() {
         if (Setting.isGlobalHistoryEnabled()) {
             List<History> items = AppDatabase.get().getHistoryDao().findAll();
-            int deleted = AppDatabase.get().getHistoryDao().delete();
-            for (History item : items) AppDatabase.get().getTrackDao().delete(item.getKey());
+            Set<Integer> cids = new HashSet<>();
+            for (History item : items) cids.add(item.getCid());
+            for (TmdbSeasonProgress progress : AppDatabase.get().getTmdbSeasonProgressDao().findAll()) {
+                cids.add(progress.cid);
+            }
+            int deleted = 0;
+            for (int cid : cids) deleted += PlaybackProgressWriter.deleteAllFromUser(cid).affected;
             if (deleted > 0) notifyChanged();
         } else {
-            delete(VodConfig.getCid());
+            PlaybackProgressWriter.deleteAllFromUser(VodConfig.getCid());
         }
+    }
+
+    public static void deleteAndSync(int cid) {
+        PlaybackProgressWriter.deleteAllFromUser(cid);
     }
 
     public static void sync(List<History> targets) {
@@ -340,23 +430,48 @@ public class History implements Diffable<History> {
 
     static History findPlaybackCandidate(String key, List<History> items, List<Flag> flags, int expectedSeason) {
         if (items == null || items.isEmpty()) return null;
+        // 集数和进度按整剧聚合，线路仍优先使用当前片源自己的历史偏好。
+        History local = findLocalPlaybackPreference(key, items, expectedSeason);
+        History selected = null;
         for (History item : items) {
             if (isSeasonEligible(item, key, expectedSeason) && canResume(item) && matchesAnyEpisode(item, flags)) {
-                return copyForPlaybackKey(item, key);
+                selected = item;
+                break;
             }
         }
-        for (History item : items) {
-            if (isSeasonEligible(item, key, expectedSeason) && canResume(item)) return copyForPlaybackKey(item, key);
+        if (selected == null) {
+            for (History item : items) {
+                if (isSeasonEligible(item, key, expectedSeason) && canResume(item)) {
+                    selected = item;
+                    break;
+                }
+            }
         }
+        if (selected == null) {
+            for (History item : items) {
+                if (isSeasonEligible(item, key, expectedSeason)) {
+                    selected = item;
+                    break;
+                }
+            }
+        }
+        return selected == null ? null : copyForPlaybackKey(selected, key, flags, local);
+    }
+
+    private static History findLocalPlaybackPreference(String key, List<History> items, int expectedSeason) {
+        if (TextUtils.isEmpty(key)) return null;
         for (History item : items) {
-            if (isSeasonEligible(item, key, expectedSeason)) return copyForPlaybackKey(item, key);
+            if (item != null && TextUtils.equals(key, item.getKey()) && isSeasonEligible(item, key, expectedSeason)) return item;
         }
         return null;
     }
 
     private static boolean isSeasonEligible(History item, String requestedKey, int expectedSeason) {
         if (item == null) return false;
-        if (expectedSeason < 0) return true;
+        if (expectedSeason < 0) {
+            boolean tmdbTv = item.getTmdbId() > 0 && "tv".equalsIgnoreCase(item.getMediaType());
+            return !tmdbTv || TextUtils.equals(requestedKey, item.getKey());
+        }
         int savedSeason = item.getTmdbSeasonNumber();
         boolean hasKnownSeason = savedSeason > 0 || (savedSeason == 0 && item.getTmdbEpisodeNumber() > 0);
         if (hasKnownSeason) return savedSeason == expectedSeason;
@@ -367,13 +482,94 @@ public class History implements Diffable<History> {
         return item != null && item.getPosition() > 0;
     }
 
-    private static History copyForPlaybackKey(History item, String key) {
+    private static History copyForPlaybackKey(History item, String key, List<Flag> flags, History local) {
         History copy = item.copy();
+        boolean sameRoute = TextUtils.equals(key, item.getKey());
         if (key != null && !key.isEmpty() && !TextUtils.equals(key, item.getKey())) {
             copy.playbackSourceKey = item.getKey();
             copy.setKey(key);
         }
+        rebindPlaybackRoute(copy, local, flags, sameRoute);
         return copy;
+    }
+
+    private static void rebindPlaybackRoute(
+            History playback, History local, List<Flag> flags, boolean sameRoute) {
+        if (playback == null || flags == null || flags.isEmpty()) return;
+        Flag preferred = sameRoute
+                ? findStableFlag(flags, playback.getSourceBindingKey(), playback.getEpisodeUrl()) : null;
+        if (preferred == null) preferred = findFlag(flags, local == null ? "" : local.getVodFlag());
+        if (preferred == null) preferred = findFlag(flags, playback.getVodFlag());
+        Episode episode = findMatchingEpisode(playback, preferred);
+        Flag resolved = episode == null ? null : preferred;
+        if (episode == null) {
+            for (Flag flag : flags) {
+                if (flag == null || flag == preferred) continue;
+                episode = findMatchingEpisode(playback, flag);
+                if (episode != null) {
+                    resolved = flag;
+                    break;
+                }
+            }
+        }
+        if (resolved == null) resolved = preferred != null ? preferred : firstFlag(flags);
+        if (resolved != null) playback.setVodFlag(resolved.getFlag());
+        playback.setSourceBindingKey(stableFlagKey(flags, resolved));
+        if (episode != null) playback.setEpisodeUrl(episode.getUrl());
+    }
+
+    private static String stableFlagKey(List<Flag> flags, Flag target) {
+        if (flags == null || target == null) return "";
+        for (int i = 0; i < flags.size(); i++) {
+            if (flags.get(i) == target) return Flag.stableKey(target, i);
+        }
+        return "";
+    }
+
+    private static Flag findStableFlag(List<Flag> flags, String key, String episodeUrl) {
+        if (flags == null || TextUtils.isEmpty(key)) return null;
+        Flag keyed = null;
+        for (int i = 0; i < flags.size(); i++) {
+            Flag flag = flags.get(i);
+            if (flag != null && TextUtils.equals(key, stableFlagKey(flags, flag))) {
+                keyed = flag;
+                break;
+            }
+        }
+        if (keyed != null && (TextUtils.isEmpty(episodeUrl)
+                || containsEpisodeUrl(keyed, episodeUrl))) return keyed;
+        Flag unique = null;
+        for (Flag flag : flags) {
+            if (!containsEpisodeUrl(flag, episodeUrl)) continue;
+            if (unique != null) return null;
+            unique = flag;
+        }
+        return unique;
+    }
+
+    private static boolean containsEpisodeUrl(Flag flag, String episodeUrl) {
+        if (flag == null || TextUtils.isEmpty(episodeUrl) || flag.getEpisodes() == null) return false;
+        for (Episode episode : flag.getEpisodes()) {
+            if (episode != null && TextUtils.equals(episodeUrl, episode.getUrl())) return true;
+        }
+        return false;
+    }
+
+    private static Flag findFlag(List<Flag> flags, String name) {
+        if (TextUtils.isEmpty(name)) return null;
+        for (Flag flag : flags) if (flag != null && TextUtils.equals(name, flag.getFlag())) return flag;
+        return null;
+    }
+
+    private static Flag firstFlag(List<Flag> flags) {
+        for (Flag flag : flags) if (flag != null) return flag;
+        return null;
+    }
+
+    private static Episode findMatchingEpisode(History history, Flag flag) {
+        if (history == null || flag == null || flag.getEpisodes() == null) return null;
+        for (Episode episode : flag.getEpisodes()) if (matchesEpisode(history, episode)) return episode;
+        return null;
     }
 
     private static boolean matchesAnyEpisode(History item, List<Flag> flags) {
@@ -443,6 +639,14 @@ public class History implements Diffable<History> {
 
     public void setVodFlag(String vodFlag) {
         this.vodFlag = vodFlag;
+    }
+
+    public String getSourceBindingKey() {
+        return sourceBindingKey == null ? "" : sourceBindingKey;
+    }
+
+    public void setSourceBindingKey(String sourceBindingKey) {
+        this.sourceBindingKey = sourceBindingKey;
     }
 
     public String getVodRemarks() {
@@ -671,7 +875,15 @@ public class History implements Diffable<History> {
     public boolean setTmdbEpisodePosition(Episode episode) {
         TmdbEpisode tmdbEpisode = episode == null ? null : episode.getTmdbEpisode();
         int episodeNumber = tmdbEpisode == null ? 0 : tmdbEpisode.getNumber();
-        int seasonNumber = tmdbEpisode == null ? 0 : tmdbEpisode.getSeasonNumber();
+        return setTmdbEpisodePosition(tmdbEpisode, episodeNumber);
+    }
+
+    public boolean setTmdbEpisodePositionWithUnknownSeason(int episodeNumber) {
+        return setTmdbEpisodePosition(null, Math.max(0, episodeNumber));
+    }
+
+    private boolean setTmdbEpisodePosition(TmdbEpisode tmdbEpisode, int episodeNumber) {
+        int seasonNumber = tmdbEpisode == null ? -1 : tmdbEpisode.getSeasonNumber();
         return setTmdbEpisodePosition(seasonNumber, episodeNumber);
     }
 
@@ -701,12 +913,11 @@ public class History implements Diffable<History> {
     }
 
     public String getSiteName() {
-        if (getCid() == VodConfig.getCid()) {
-            if (SiteApi.PUSH.equals(getSiteKey())) return "";
-            Site site = VodConfig.get().getSite(getSiteKey());
-            if (!site.isEmpty()) return site.getDisplayName();
-        }
-        return ResUtil.getString(R.string.history_other_config);
+        if (getCid() != VodConfig.getCid()) return ResUtil.getString(R.string.history_other_config);
+        if (SiteApi.PUSH.equals(getSiteKey())) return "";
+        if (VodConfig.get().getSites().isEmpty()) return "";
+        Site site = VodConfig.get().getSite(getSiteKey());
+        return site.isEmpty() ? ResUtil.getString(R.string.history_source_unavailable) : site.getDisplayName();
     }
 
     public boolean isCurrentSourceAvailable() {
@@ -741,7 +952,7 @@ public class History implements Diffable<History> {
      */
     public History forPlaybackKey(String key, int cid) {
         History copy = copy();
-        copy.playbackSourceKey = getKey();
+        if (getCid() != cid || !TextUtils.equals(getKey(), key)) copy.playbackSourceKey = getKey();
         copy.setKey(key);
         copy.setCid(cid);
         return copy;
@@ -815,6 +1026,24 @@ public class History implements Diffable<History> {
         return remaining >= 0 && remaining <= threshold;
     }
 
+    /**
+     * 片尾时间是否已到，可判定本集播完。
+     * ending 存在 History 上，主键不含集数（siteKey##vodId），因此整剧共享同一个值；
+     * 而 duration 来自当前集。若某集明显更短（预告/彩蛋/番外，或源站给了错误时长），
+     * 裸用 ending + position >= duration 会在刚开播、position 还很小时就成立，
+     * 把用户从未看过的一集直接判为播完并跳走。这里要求：
+     * 1) ending 不得超过本集时长所允许的片尾上限——用与设置端相同的
+     *    Constant.getOpEdLimit(duration)，凡是本集根本设不出来的值即为跨集错配；
+     * 2) 至少已播过一小段，排除开播瞬间误判。短视频按时长比例缩放该门槛，
+     *    避免总时长很短时片尾永不触发。
+     */
+    public boolean isEndingReached(long position, long duration) {
+        if (getEnding() <= 0 || duration <= 0 || position < 0) return false;
+        if (getEnding() > Constant.getOpEdLimit(duration)) return false;
+        if (position < Math.min(ENDING_MIN_PLAYED_MS, duration / 4)) return false;
+        return getEnding() + position >= duration;
+    }
+
     public void resetPlaybackPosition() {
         setPosition(C.TIME_UNSET);
         setDuration(C.TIME_UNSET);
@@ -843,16 +1072,38 @@ public class History implements Diffable<History> {
      * 将历史记录的 key 迁移到新值。
      * 仅在 key 实际变化时删除旧 key，避免同 key 先删后写失败导致历史消失。
      * 迁移后立即 save 新 key，缩短「旧已删、新未写」窗口。
+     *
+     * <p>push（网盘/推送/本地文件）记录不迁移：它的 key 第二段就是那条播放地址本身
+     * （见 {@link #getVodId()} 与 SiteApi#pushDetail），而从历史进入播放正是靠这一段反解
+     * 出 vodId。普通站点的 vodId 是稳定的条目 id，迁移无害；push 迁移则会把记录改写成详情
+     * 阶段解析出的另一条地址，那条地址往往带时效，下次从历史打开必然失败，用户只能回网盘
+     * 重新找。按名合并（{@link #canMergeByName()}）已对 push 豁免，这里补齐同样的豁免。
      */
     public void replace(String key) {
         if (TextUtils.isEmpty(key) || TextUtils.equals(getKey(), key)) return;
+        if (isPushHistory()) return;
         String previous = getKey();
+        enrichTmdbId();
+        updateTime = System.currentTimeMillis();
         setKey(key);
-        if (!TextUtils.isEmpty(previous)) {
-            AppDatabase.get().getHistoryDao().delete(VodConfig.getCid(), previous);
-            AppDatabase.get().getTrackDao().delete(previous);
-        }
-        save();
+        History[] before = {null};
+        boolean[] saved = {false};
+        TmdbSeasonProgressStore.runInTransaction(() -> {
+            List<PlaybackDeleteTombstone> tombstones = PlaybackDeleteTombstoneStore.snapshot();
+            long deletedAt = Math.max(latestDeletion(tombstones, previous), latestDeletion(tombstones, key));
+            if (!writeSurvivesDeletion(getCreateTime(), deletedAt)) return null;
+            before[0] = find(getCid(), previous);
+            if (!TextUtils.isEmpty(previous)) {
+                AppDatabase.get().getTmdbSeasonProgressDao().replaceSourceHistoryKey(getCid(), previous, key);
+                AppDatabase.get().getHistoryDao().delete(getCid(), previous);
+                AppDatabase.get().getTrackDao().delete(previous);
+            }
+            AppDatabase.get().getHistoryDao().insertOrUpdate(this);
+            TmdbSeasonProgressStore.write(this);
+            saved[0] = true;
+            return null;
+        });
+        if (saved[0] && recommendationSignalsChanged(before[0], this)) notifyChanged();
     }
 
     public History save(int cid) {
@@ -873,11 +1124,22 @@ public class History implements Diffable<History> {
 
     public History save() {
         enrichTmdbId();
-        History before = find(getKey());
-        boolean notify = recommendationSignalsChanged(before, this);
         updateTime = System.currentTimeMillis();
-        AppDatabase.get().getHistoryDao().insertOrUpdate(this);
-        if (notify) notifyChanged();
+        History[] before = {null};
+        boolean[] saved = {false};
+        TmdbSeasonProgressStore.runInTransaction(() -> {
+            long deletedAt = latestDeletion(PlaybackDeleteTombstoneStore.snapshot(), getKey());
+            if (!writeSurvivesDeletion(getCreateTime(), deletedAt)) return null;
+            before[0] = find(getCid(), getKey());
+            if (mediaIdentityChanged(before[0], this)) {
+                AppDatabase.get().getTmdbSeasonProgressDao().deleteBySource(getCid(), getKey());
+            }
+            AppDatabase.get().getHistoryDao().insertOrUpdate(this);
+            TmdbSeasonProgressStore.write(this);
+            saved[0] = true;
+            return null;
+        });
+        if (saved[0] && recommendationSignalsChanged(before[0], this)) notifyChanged();
         return this;
     }
 
@@ -891,26 +1153,97 @@ public class History implements Diffable<History> {
 
     private History deleteRelated(boolean global) {
         boolean deleted;
-        List<History> relatedItems = Collections.emptyList();
         String identity = HistoryDisplayPolicy.tmdbIdentity(this);
-        if (!identity.isEmpty() && Setting.isHistoryAggregationEffective()) {
+        if (global && identity.contains(":season:") && Setting.isHistoryAggregationEffective()) {
+            String mediaType = identity.substring(0, identity.indexOf(':'));
+            int seasonNumber = getTmdbSeasonNumber();
+            Set<Integer> cids = seasonDeleteCids(
+                    AppDatabase.get().getHistoryDao().findByTmdbIdentity(mediaType, getTmdbId()),
+                    AppDatabase.get().getTmdbSeasonProgressDao().findAll(),
+                    mediaType, getTmdbId(), seasonNumber, getCid());
+            deleted = false;
+            for (Integer cid : cids) {
+                History target = copy();
+                target.setCid(cid);
+                deleted |= PlaybackProgressWriter.deleteFromUser(target).affected > 0;
+            }
+            if (deleted) notifyChanged();
+            return this;
+        }
+        List<History> relatedItems = Collections.emptyList();
+        if (!identity.isEmpty() && !identity.startsWith("source:") && Setting.isHistoryAggregationEffective()) {
             String mediaType = identity.substring(0, identity.indexOf(':'));
             relatedItems = global
                     ? AppDatabase.get().getHistoryDao().findByTmdbIdentity(mediaType, getTmdbId())
                     : AppDatabase.get().getHistoryDao().findByTmdbIdentity(getCid(), mediaType, getTmdbId());
+            if (!relatedItems.isEmpty() && identity.contains(":season:")) {
+                List<History> seasonItems = new ArrayList<>();
+                for (History item : relatedItems) {
+                    if (identity.equals(HistoryDisplayPolicy.tmdbIdentity(item))) seasonItems.add(item);
+                }
+                relatedItems = seasonItems;
+            }
         }
         if (!relatedItems.isEmpty()) {
-            deleted = true;
+            deleted = false;
             for (History item : relatedItems) {
-                AppDatabase.get().getHistoryDao().delete(item.getCid(), item.getKey());
-                AppDatabase.get().getTrackDao().delete(item.getKey());
+                deleted |= PlaybackProgressWriter.deleteFromUser(item).affected > 0;
             }
         } else {
-            deleted = AppDatabase.get().getHistoryDao().delete(getCid(), getKey()) > 0;
-            AppDatabase.get().getTrackDao().delete(getKey());
+            deleted = PlaybackProgressWriter.deleteFromUser(this).affected > 0;
         }
         if (deleted) notifyChanged();
         return this;
+    }
+
+    private static boolean mediaIdentityChanged(History before, History after) {
+        if (before == null || after == null) return false;
+        return before.getTmdbId() != after.getTmdbId()
+                || !TmdbSeasonProgress.normalizeMediaType(before.getMediaType()).equals(
+                TmdbSeasonProgress.normalizeMediaType(after.getMediaType()));
+    }
+
+    static boolean writeSurvivesDeletion(long updatedAt, long deletedAt) {
+        return deletedAt <= 0 || updatedAt > deletedAt;
+    }
+
+    private long latestDeletion(List<PlaybackDeleteTombstone> tombstones, String historyKey) {
+        String value = Objects.toString(historyKey, "");
+        String[] parts = value.split(AppDatabase.SYMBOL);
+        String siteKey = parts.length > 0 ? parts[0] : "";
+        String vodId = parts.length > 1 ? parts[1] : "";
+        return PlaybackDeleteTombstoneStore.latest(tombstones, "", getCid(), value, siteKey, vodId,
+                getMediaType(), getTmdbId(), getTmdbSeasonNumber());
+    }
+
+    static Set<Integer> seasonDeleteCids(
+            List<History> histories,
+            List<TmdbSeasonProgress> progress,
+            String mediaType,
+            int tmdbId,
+            int seasonNumber,
+            int currentCid) {
+        Set<Integer> result = new HashSet<>();
+        if (currentCid >= 0) result.add(currentCid);
+        String normalizedMediaType = TmdbSeasonProgress.normalizeMediaType(mediaType);
+        if (histories != null) {
+            for (History history : histories) {
+                if (history != null && history.getTmdbId() == tmdbId
+                        && normalizedMediaType.equals(TmdbSeasonProgress.normalizeMediaType(history.getMediaType()))) {
+                    result.add(history.getCid());
+                }
+            }
+        }
+        if (progress != null) {
+            for (TmdbSeasonProgress snapshot : progress) {
+                if (snapshot != null && snapshot.tmdbId == tmdbId
+                        && snapshot.seasonNumber == seasonNumber
+                        && normalizedMediaType.equals(TmdbSeasonProgress.normalizeMediaType(snapshot.mediaType))) {
+                    result.add(snapshot.cid);
+                }
+            }
+        }
+        return result;
     }
 
     private static void notifyChanged() {
@@ -928,6 +1261,10 @@ public class History implements Diffable<History> {
                 || !Objects.equals(before.getActor(), after.getActor())
                 || !Objects.equals(before.getDirector(), after.getDirector())
                 || !Objects.equals(before.getYear(), after.getYear());
+    }
+
+    public History deleteAndSync() {
+        return deleteDisplayItem();
     }
 
     public void findEpisode(List<Flag> flags) {
@@ -964,12 +1301,12 @@ public class History implements Diffable<History> {
     public boolean equals(@Nullable Object obj) {
         if (this == obj) return true;
         if (!(obj instanceof History it)) return false;
-        return Objects.equals(getKey(), it.getKey());
+        return Objects.equals(getDisplayIdentity(), it.getDisplayIdentity());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(getKey());
+        return Objects.hash(getDisplayIdentity());
     }
 
     @NonNull
@@ -981,6 +1318,14 @@ public class History implements Diffable<History> {
     @Override
     public boolean isSameItem(History other) {
         return equals(other);
+    }
+
+    public String getDisplayIdentity() {
+        return TextUtils.isEmpty(displayIdentity) ? getKey() : displayIdentity;
+    }
+
+    public void setDisplayIdentity(String displayIdentity) {
+        this.displayIdentity = displayIdentity;
     }
 
     @Override

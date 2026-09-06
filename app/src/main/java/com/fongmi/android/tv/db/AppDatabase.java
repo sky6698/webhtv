@@ -12,15 +12,19 @@ import com.fongmi.android.tv.bean.Device;
 import com.fongmi.android.tv.bean.History;
 import com.fongmi.android.tv.bean.Keep;
 import com.fongmi.android.tv.bean.Live;
+import com.fongmi.android.tv.bean.PlaybackDeleteTombstone;
 import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.bean.Track;
+import com.fongmi.android.tv.bean.TmdbSeasonProgress;
 import com.fongmi.android.tv.db.dao.ConfigDao;
 import com.fongmi.android.tv.db.dao.DeviceDao;
 import com.fongmi.android.tv.db.dao.HistoryDao;
 import com.fongmi.android.tv.db.dao.KeepDao;
 import com.fongmi.android.tv.db.dao.LiveDao;
+import com.fongmi.android.tv.db.dao.PlaybackDeleteTombstoneDao;
 import com.fongmi.android.tv.db.dao.SiteDao;
 import com.fongmi.android.tv.db.dao.TrackDao;
+import com.fongmi.android.tv.db.dao.TmdbSeasonProgressDao;
 import com.fongmi.android.tv.utils.AppBackup;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.Task;
@@ -33,10 +37,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Database(entities = {Keep.class, Site.class, Live.class, Track.class, Config.class, Device.class, History.class}, version = AppDatabase.VERSION)
+@Database(entities = {Keep.class, Site.class, Live.class, Track.class, Config.class, Device.class, History.class, PlaybackDeleteTombstone.class, TmdbSeasonProgress.class}, version = AppDatabase.VERSION)
 public abstract class AppDatabase extends RoomDatabase {
 
-    public static final int VERSION = 40;
+    public static final int VERSION = 44;
     public static final String NAME = "tv";
     public static final String SYMBOL = "@@@";
     private static final int BACKUP_KEEP_COUNT = 7;
@@ -170,6 +174,10 @@ public abstract class AppDatabase extends RoomDatabase {
                 .addMigrations(Migrations.MIGRATION_37_38)
                 .addMigrations(Migrations.MIGRATION_38_39)
                 .addMigrations(Migrations.MIGRATION_39_40)
+                .addMigrations(Migrations.MIGRATION_40_41)
+                .addMigrations(Migrations.MIGRATION_41_42)
+                .addMigrations(Migrations.MIGRATION_42_43)
+                .addMigrations(Migrations.MIGRATION_43_44)
                 .fallbackToDestructiveMigration(true)
                 .allowMainThreadQueries().build();
     }
@@ -187,4 +195,8 @@ public abstract class AppDatabase extends RoomDatabase {
     public abstract DeviceDao getDeviceDao();
 
     public abstract HistoryDao getHistoryDao();
+
+    public abstract PlaybackDeleteTombstoneDao getPlaybackDeleteTombstoneDao();
+
+    public abstract TmdbSeasonProgressDao getTmdbSeasonProgressDao();
 }

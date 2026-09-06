@@ -31,6 +31,7 @@ import com.fongmi.android.tv.bean.Track;
 import com.fongmi.android.tv.databinding.DialogTrackBinding;
 import com.fongmi.android.tv.player.PlayerHelper;
 import com.fongmi.android.tv.player.PlayerManager;
+import com.fongmi.android.tv.player.exo.TrackUtil;
 import com.fongmi.android.tv.service.AiSubtitleTranslationService;
 import com.fongmi.android.tv.setting.PlaybackPerformanceSetting;
 import com.fongmi.android.tv.setting.PlayerSetting;
@@ -157,6 +158,7 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
         binding.search.setOnClickListener(this::onSearch);
         binding.ai.setOnClickListener(this::onAiTranslate);
         binding.realtimeAi.setOnClickListener(this::onRealtimeAi);
+        binding.realtimeLanguage.setOnClickListener(this::onRealtimeLanguage);
         binding.aiRegenerate.setOnClickListener(this::onAiRegenerate);
         binding.subtitle.setOnClickListener(this::onSubtitle);
     }
@@ -174,6 +176,8 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
         binding.search.setVisibility(hasSearch() ? View.VISIBLE : View.GONE);
         binding.ai.setVisibility(hasAi() ? View.VISIBLE : View.GONE);
         binding.realtimeAi.setVisibility(hasRealtimeAi() ? View.VISIBLE : View.GONE);
+        binding.realtimeLanguage.setVisibility(hasRealtimeAi() ? View.VISIBLE : View.GONE);
+        updateRealtimeLanguage();
         updateRealtimeButton();
         binding.aiRegenerate.setVisibility(hasAiRegenerate() ? View.VISIBLE : View.GONE);
         binding.aiStatus.setVisibility(View.GONE);
@@ -233,27 +237,58 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
             return;
         }
         if (!controller.isModelReady()) {
-            showRealtimeModelSelection();
+            showRealtimeModelSelection(true);
             return;
         }
         enableRealtimeAi();
     }
 
     private void showRealtimeModelSelection() {
+        showRealtimeModelSelection(true);
+    }
+
+    private void onRealtimeLanguage(View view) {
+        showRealtimeModelSelection(false);
+    }
+
+    private void showRealtimeModelSelection(boolean startAfterSelection) {
         String[] labels = ResUtil.getStringArray(R.array.select_realtime_subtitle_model);
         String[] values = ResUtil.getStringArray(R.array.select_realtime_subtitle_model_value);
+        String currentValue = Setting.getRealtimeSubtitleModel();
         int checked = 0;
         for (int i = 0; i < values.length; i++) {
-            if (TextUtils.equals(values[i], Setting.getRealtimeSubtitleModel())) {
+            if (TextUtils.equals(values[i], currentValue)) {
                 checked = i;
                 break;
             }
         }
         SubtitleSettingsDialog.showRealtimeModel(requireActivity(), labels, checked, false, index -> {
             if (index < 0 || index >= values.length) return;
+            boolean changed = !TextUtils.equals(currentValue, values[index]);
             Setting.putRealtimeSubtitleModel(values[index]);
-            enableRealtimeAi();
+            updateRealtimeLanguage();
+            RealtimeSubtitleController controller = RealtimeSubtitleController.get();
+            if (controller.isEnabled() || controller.isPreparing()) {
+                if (changed) controller.switchModel(player);
+                return;
+            }
+            if (startAfterSelection) enableRealtimeAi();
         }, null);
+    }
+
+    private void updateRealtimeLanguage() {
+        if (!isUiAlive()) return;
+        String[] labels = ResUtil.getStringArray(R.array.select_realtime_subtitle_language);
+        String[] values = ResUtil.getStringArray(R.array.select_realtime_subtitle_model_value);
+        String selected = Setting.getRealtimeSubtitleModel();
+        int index = 0;
+        for (int i = 0; i < values.length; i++) {
+            if (TextUtils.equals(values[i], selected)) {
+                index = i;
+                break;
+            }
+        }
+        binding.realtimeLanguageText.setText(labels != null && index < labels.length ? labels[index] : selected);
     }
 
     private void enableRealtimeAi() {
@@ -273,8 +308,7 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
 
     private void startRealtimeAi() {
         RealtimeSubtitleController controller = RealtimeSubtitleController.get();
-        controller.requestAudioPipeline();
-        if (!controller.isAudioPipelineReady()) player.rebuildAudioPipeline();
+        if (controller.requestAudioPipeline(player)) player.rebuildAudioPipeline();
         controller.enable(player);
     }
 
@@ -286,14 +320,15 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
         PlayerSetting.putTunnel(false);
         PlaybackPerformanceSetting.markCustom();
         RealtimeSubtitleController controller = RealtimeSubtitleController.get();
-        controller.requestAudioPipeline();
-        if (changed || !controller.isAudioPipelineReady()) player.rebuildAudioPipeline();
+        boolean pipelineMissing = controller.requestAudioPipeline(player);
+        if (changed || pipelineMissing) player.rebuildAudioPipeline();
         enableRealtimeAi();
     }
 
     @Override
     public void onStateChanged(RealtimeSubtitleController.State state, String message) {
         realtimeState = state;
+        updateRealtimeLanguage();
         updateRealtimeButton();
         if (!isUiAlive()) return;
         switch (state) {
@@ -302,7 +337,10 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
                 if (progress > 0) showAiStatus(getString(R.string.subtitle_realtime_preparing_progress, progress));
                 else showAiStatus(R.string.subtitle_realtime_preparing);
             }
-            case ON -> showAiStatus(R.string.subtitle_realtime_on);
+            case ON -> {
+                if (TextUtils.isEmpty(message)) showAiStatus(R.string.subtitle_realtime_on);
+                else showAiMessage(getString(R.string.subtitle_realtime_failed, message));
+            }
             case ERROR -> showAiMessage(getString(R.string.subtitle_realtime_failed, message));
             case OFF -> {
                 if (!aiTranslating) showAiStatus("");
@@ -544,7 +582,10 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
     }
 
     private void addTrack(List<Track> items) {
-        List<Tracks.Group> groups = player.getCurrentTracks().getGroups();
+        // 只取一次轨道快照：MPV/IJK 的快照由原生回调线程写入，分两次读可能拿到不同的轨道集合。
+        Tracks tracks = player.getCurrentTracks();
+        List<Tracks.Group> groups = tracks.getGroups();
+        Format active = activeVideoFormat(tracks);
         for (int i = 0; i < groups.size(); i++) {
             Tracks.Group trackGroup = groups.get(i);
             if (trackGroup.getType() != type) continue;
@@ -556,11 +597,26 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
                 // switching must target this stable id directly; the formatted description
                 // is only persisted for restoring a preference on the next playback.
                 Track item = new Track(type, name, PlayerHelper.describeFormat(format)).playerId(format.id);
-                item.setSelected(secondarySubtitle ? player.isSecondarySubtitleSelected(format) : trackGroup.isTrackSelected(j));
+                item.setSelected(isSelected(trackGroup, j, format, active));
                 items.add(item);
             }
         }
         addPendingSubtitleTrack(items);
+    }
+
+    private boolean isSelected(Tracks.Group trackGroup, int trackIndex, Format format, Format active) {
+        if (secondarySubtitle) return player.isSecondarySubtitleSelected(format);
+        // 自适应选轨会同时选中同组里的多条轨道，列表因此会高亮出多项。已经确认当前正在解码的
+        // 那一条时只高亮它，其余情况仍沿用播放器的选中标记。
+        // 这里按引用比对：uniqueActiveFormat 返回的就是轨道列表里的那个实例，而字段完全相同的
+        // 两条轨道用 equals 会同时命中，反而又变成多项高亮。media3 的 TrackGroup.indexOf 同样按引用定位。
+        if (active != null) return format == active;
+        return trackGroup.isTrackSelected(trackIndex);
+    }
+
+    private Format activeVideoFormat(Tracks tracks) {
+        if (secondarySubtitle || type != C.TRACK_TYPE_VIDEO) return null;
+        return TrackUtil.uniqueActiveFormat(tracks, type, player.getVideoFormat());
     }
 
     private void addPendingSubtitleTrack(List<Track> items) {

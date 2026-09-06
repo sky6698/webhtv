@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -81,6 +82,9 @@ public class TmdbMatcher {
             SpiderDebug.log("TMDB 匹配成功: " + match.getTitle() + " [" + match.getMediaType() + "]");
             return match;
 
+        } catch (TmdbService.AuthException | CancellationException e) {
+            SpiderDebug.log("TMDB 搜索中止: " + e.getMessage());
+            throw e;
         } catch (Exception e) {
             SpiderDebug.log("TMDB 搜索失败: " + e.getMessage());
             return null;
@@ -188,6 +192,10 @@ public class TmdbMatcher {
         if (closeYear != null) return isUnwantedSplitSeasonMatch(closeYear, keyword, vod) ? null : closeYear;
         if (sourceYear <= 0 && sameTitle != null) return isUnwantedSplitSeasonMatch(sameTitle, keyword, vod) ? null : sameTitle;
         return null;
+    }
+
+    public void sortSearchResults(List<TmdbItem> items, String keyword) {
+        sortSearchResults(items, keyword, sourceYear(keyword, null));
     }
 
     private void sortSearchResults(List<TmdbItem> items, String keyword, int sourceYear) {

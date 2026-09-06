@@ -19,9 +19,13 @@ import org.simpleframework.xml.Text;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
 public class Flag implements Parcelable, Diffable<Flag> {
 
@@ -67,6 +71,11 @@ public class Flag implements Parcelable, Diffable<Flag> {
         Flag item = create(flag);
         item.setEpisodes(url);
         return item;
+    }
+
+    public static String stableKey(Flag flag, int index) {
+        String value = flag == null || TextUtils.isEmpty(flag.getFlag()) ? "flag" : flag.getFlag().trim();
+        return value + "#" + Math.max(0, index);
     }
 
     public String getShow() {
@@ -132,6 +141,10 @@ public class Flag implements Parcelable, Diffable<Flag> {
     public void setSelected(Flag item) {
         this.selected = item.equals(this);
         if (selected) item.episodes = episodes;
+    }
+
+    public void setSelected(boolean selected) {
+        this.selected = selected;
     }
 
     private void setSelected(Episode episode) {
@@ -218,11 +231,27 @@ public class Flag implements Parcelable, Diffable<Flag> {
     }
 
     public void mergeEpisodes(List<Episode> items, boolean rev) {
+        if (items == null || items.isEmpty()) return;
+        if (items == getEpisodes()) return;
+        IdentityHashMap<Episode, Episode> byIdentity = new IdentityHashMap<>();
+        Map<String, Episode> byUrl = new HashMap<>();
+        Map<Episode, Episode> byValue = new HashMap<>();
+        Map<String, Episode> byName = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (Episode episode : getEpisodes()) {
+            byIdentity.put(episode, episode);
+            byValue.putIfAbsent(episode, episode);
+            if (episode == null) continue;
+            if (!TextUtils.isEmpty(episode.getUrl())) byUrl.putIfAbsent(episode.getUrl(), episode);
+            byName.putIfAbsent(episode.getName(), episode);
+        }
         List<Episode> toAdd = new ArrayList<>();
         for (Episode item : items) {
-            int index = indexOf(item);
-            if (index != -1) {
-                mergeEpisode(getEpisodes().get(index), item);
+            Episode target = byIdentity.get(item);
+            if (target == null && item != null && !TextUtils.isEmpty(item.getUrl())) target = byUrl.get(item.getUrl());
+            if (target == null) target = byValue.get(item);
+            if (target == null && item != null && TextUtils.isEmpty(item.getUrl())) target = byName.get(item.getName());
+            if (target != null) {
+                mergeEpisode(target, item);
                 continue;
             }
             toAdd.add(item);
@@ -239,7 +268,10 @@ public class Flag implements Parcelable, Diffable<Flag> {
 
     private void mergeEpisode(Episode target, Episode source) {
         if (target == null || source == null) return;
-        if (source.getTmdbEpisode() != null) target.setTmdbEpisode(source.getTmdbEpisode());
+        if (source.getTmdbEpisode() != null) {
+            if (source.isTmdbEpisodeMapped()) target.setMappedTmdbEpisode(source.getTmdbEpisode());
+            else target.setTmdbEpisode(source.getTmdbEpisode());
+        }
         if (!TextUtils.equals(source.getDisplayName(), source.getRawDisplayName())) target.setDisplayName(source.getDisplayName());
     }
 

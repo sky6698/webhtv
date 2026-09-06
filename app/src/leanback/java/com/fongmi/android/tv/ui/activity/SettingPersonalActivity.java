@@ -11,7 +11,7 @@ import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.bean.HomeButton;
 import com.fongmi.android.tv.databinding.ActivitySettingPersonalBinding;
 import com.fongmi.android.tv.event.RefreshEvent;
-import com.fongmi.android.tv.service.RecommendationFeedbackStore;
+import com.fongmi.android.tv.setting.AppBranding;
 import com.fongmi.android.tv.setting.AutoBackupPolicy;
 import com.fongmi.android.tv.setting.GroupRuleConfig;
 import com.fongmi.android.tv.setting.PlayerSetting;
@@ -20,11 +20,11 @@ import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.GroupRuleDialog;
 import com.fongmi.android.tv.ui.dialog.HomeButtonDialog;
 import com.fongmi.android.tv.ui.dialog.HomeMenuKeyDialog;
-import com.fongmi.android.tv.ui.dialog.RecommendationFeedbackDialog;
 import com.fongmi.android.tv.ui.dialog.SpeedSettingDialog;
 import com.fongmi.android.tv.ui.dialog.SliderNumberDialog;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
+import com.fongmi.android.tv.utils.Util;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.Locale;
@@ -37,7 +37,6 @@ public class SettingPersonalActivity extends BaseActivity {
     private String[] searchUi;
     private String[] searchColumn;
     private String[] searchResultSort;
-    private String[] tmdbMatchMode;
     private String[] globalHistoryMode;
 
     public static void start(Activity activity) {
@@ -57,12 +56,12 @@ public class SettingPersonalActivity extends BaseActivity {
     protected void initView(Bundle savedInstanceState) {
         mBinding.homeVodAutoLoad.requestFocus();
         setText();
-        updateHistoryAggregationVisibility();
     }
 
     @Override
     protected void initEvent() {
         mBinding.homeVodAutoLoad.setOnClickListener(this::setHomeVodAutoLoad);
+        mBinding.homeSiteLock.setOnClickListener(this::setHomeSiteLock);
         mBinding.autoBackup.setOnClickListener(this::setAutoBackup);
         mBinding.homeButtons.setOnClickListener(this::onHomeButtons);
         mBinding.fullscreenMenuKey.setOnClickListener(this::setFullscreenMenuKey);
@@ -70,18 +69,15 @@ public class SettingPersonalActivity extends BaseActivity {
         mBinding.playBackToDetail.setOnClickListener(this::setPlayBackToDetail);
         mBinding.episodeHistory.setOnClickListener(this::setEpisodeHistory);
         mBinding.globalHistory.setOnClickListener(this::setGlobalHistory);
-        mBinding.historyAggregation.setOnClickListener(this::setHistoryAggregation);
         mBinding.playSpeed.setOnClickListener(this::setPlaySpeed);
-        mBinding.tmdbMatchMode.setOnClickListener(this::setTmdbMatchMode);
-        mBinding.personalRecommendation.setOnClickListener(this::setPersonalRecommendation);
-        mBinding.recommendationFeedback.setOnClickListener(this::manageRecommendationFeedback);
         mBinding.groupRule.setOnClickListener(this::setGroupRule);
         mBinding.homeHistory.setOnClickListener(this::setHomeHistory);
-        mBinding.tmdbEpisodeFileSize.setOnClickListener(this::setTmdbEpisodeFileSize);
         mBinding.searchThread.setOnClickListener(this::setSearchThread);
         mBinding.searchUi.setOnClickListener(this::setSearchUi);
         mBinding.searchResultSort.setOnClickListener(this::setSearchResultSort);
         // mBinding.searchColumn.setOnClickListener(this::setSearchColumn); // 在搜索页面切换更方便
+        mBinding.appBranding.setOnClickListener(this::startAppBranding);
+        mBinding.resetApp.setOnClickListener(this::showResetAppDialog);
     }
 
     @Override
@@ -92,6 +88,7 @@ public class SettingPersonalActivity extends BaseActivity {
 
     private void setText() {
         mBinding.homeVodAutoLoadText.setText(getSwitch(Setting.isHomeVodAutoLoad()));
+        mBinding.homeSiteLockText.setText(getSwitch(Setting.isHomeSiteLock()));
         mBinding.autoBackupText.setText(getSwitch(isAutoBackupEnabled()));
         mBinding.homeButtonsText.setText(getString(R.string.home_buttons_selected, HomeButton.getButtons().size(), HomeButton.all().size()));
         mBinding.fullscreenMenuKeyText.setText((fullscreenMenuKey = getResources().getStringArray(R.array.select_fullscreen_menu_key))[Setting.getFullscreenMenuKey()]);
@@ -99,22 +96,14 @@ public class SettingPersonalActivity extends BaseActivity {
         mBinding.playBackToDetailText.setText(getSwitch(Setting.isPlayBackToDetail()));
         mBinding.episodeHistoryText.setText(getSwitch(Setting.isEpisodeHistory()));
         mBinding.globalHistoryText.setText((globalHistoryMode = getResources().getStringArray(R.array.select_global_history_mode))[Setting.getGlobalHistoryMode()]);
-        mBinding.historyAggregation.setVisibility(Setting.isTmdbReady() ? View.VISIBLE : View.GONE);
-        mBinding.historyAggregationText.setText(getSwitch(Setting.isHistoryAggregationByTmdb()));
         mBinding.playSpeedText.setText(getSpeedText(PlayerSetting.getDefaultSpeed()));
-        mBinding.tmdbMatchModeText.setText((tmdbMatchMode = getResources().getStringArray(R.array.select_tmdb_match_mode))[Setting.getTmdbMatchMode()]);
-        mBinding.personalRecommendationText.setText(getSwitch(Setting.isPersonalRecommendation()));
-        int feedbackCount = RecommendationFeedbackStore.size();
-        mBinding.recommendationFeedbackText.setText(feedbackCount == 0
-                ? getString(R.string.setting_recommendation_feedback_empty)
-                : getString(R.string.setting_recommendation_feedback_count, feedbackCount));
         mBinding.groupRuleText.setText(getString(R.string.setting_group_rule_summary, GroupRuleConfig.enabledCount(), GroupRuleConfig.totalCount()));
         mBinding.homeHistoryText.setText(getSwitch(Setting.isHomeHistory()));
-        mBinding.tmdbEpisodeFileSizeText.setText(getSwitch(Setting.isTmdbEpisodeFileSize()));
         mBinding.searchThreadText.setText(String.valueOf(Setting.getSearchThread()));
         mBinding.searchUiText.setText((searchUi = getResources().getStringArray(R.array.select_search_ui))[Setting.getSearchUi()]);
         mBinding.searchResultSortText.setText((searchResultSort = getResources().getStringArray(R.array.select_search_result_sort))[Setting.getSearchResultSort()]);
         // mBinding.searchColumnText.setText(getSearchColumnText()); // 在搜索页面切换更方便
+        mBinding.appBrandingText.setText(AppBranding.getSummary(this));
     }
 
     private String getSearchColumnText() {
@@ -132,6 +121,11 @@ public class SettingPersonalActivity extends BaseActivity {
 
     private void setHomeVodAutoLoad(View view) {
         Setting.putHomeVodAutoLoad(!Setting.isHomeVodAutoLoad());
+        setText();
+    }
+
+    private void setHomeSiteLock(View view) {
+        Setting.putHomeSiteLock(!Setting.isHomeSiteLock());
         setText();
     }
 
@@ -184,47 +178,11 @@ public class SettingPersonalActivity extends BaseActivity {
         setText();
     }
 
-    private void setHistoryAggregation(View view) {
-        Setting.putHistoryAggregationByTmdb(!Setting.isHistoryAggregationByTmdb());
-        RefreshEvent.history();
-        setText();
-    }
-
-    private void updateHistoryAggregationVisibility() {
-        mBinding.historyAggregation.setVisibility(Setting.isTmdbReady() ? View.VISIBLE : View.GONE);
-    }
-
     private void setPlaySpeed(View view) {
         SpeedSettingDialog.show(this, R.string.setting_play_speed, PlayerSetting.getDefaultSpeed(), 0.5f, 5f, 0.25f, value -> {
             PlayerSetting.putDefaultSpeed(value);
             setText();
         });
-    }
-
-    private void setTmdbMatchMode(View view) {
-        Setting.putTmdbMatchMode((Setting.getTmdbMatchMode() + 1) % tmdbMatchMode.length);
-        setText();
-    }
-
-    private void setPersonalRecommendation(View view) {
-        if (Setting.isPersonalRecommendation()) {
-            Setting.putPersonalRecommendation(false);
-            setText();
-            return;
-        }
-        new MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.personal_recommendation_confirm_title)
-                .setMessage(R.string.personal_recommendation_confirm_message)
-                .setNegativeButton(R.string.dialog_negative, null)
-                .setPositiveButton(R.string.dialog_positive, (dialog, which) -> {
-                    Setting.putPersonalRecommendation(true);
-                    setText();
-                })
-                .show();
-    }
-
-    private void manageRecommendationFeedback(View view) {
-        RecommendationFeedbackDialog.create().onChanged(this::setText).show(this);
     }
 
     private void setGroupRule(View view) {
@@ -234,11 +192,6 @@ public class SettingPersonalActivity extends BaseActivity {
     private void setHomeHistory(View view) {
         Setting.putHomeHistory(!Setting.isHomeHistory());
         RefreshEvent.history();
-        setText();
-    }
-
-    private void setTmdbEpisodeFileSize(View view) {
-        Setting.putTmdbEpisodeFileSize(!Setting.isTmdbEpisodeFileSize());
         setText();
     }
 
@@ -257,6 +210,23 @@ public class SettingPersonalActivity extends BaseActivity {
     private void setSearchResultSort(View view) {
         Setting.putSearchResultSort((Setting.getSearchResultSort() + 1) % searchResultSort.length);
         setText();
+    }
+
+    private void showResetAppDialog(View view) {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.dialog_reset_app)
+                .setMessage(R.string.dialog_reset_app_data)
+                .setNegativeButton(R.string.dialog_negative, null)
+                .setPositiveButton(R.string.dialog_positive, (dialog, which) -> resetApp())
+                .show();
+    }
+
+    private void startAppBranding(View view) {
+        AppBrandingActivity.start(this);
+    }
+
+    private void resetApp() {
+        if (!Util.resetApp()) Notify.show(R.string.reset_app_failed);
     }
 
     // 在搜索页面切换更方便，此处不再提供设置入口

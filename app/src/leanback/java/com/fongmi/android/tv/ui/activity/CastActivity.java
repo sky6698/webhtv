@@ -31,6 +31,7 @@ import com.fongmi.android.tv.service.PlaybackService;
 import com.fongmi.android.tv.setting.PlayerSetting;
 import com.fongmi.android.tv.ui.custom.CustomKeyDownVod;
 import com.fongmi.android.tv.ui.custom.CustomSeekView;
+import com.fongmi.android.tv.ui.dialog.PlayerKernelDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.TrackDialog;
 import com.fongmi.android.tv.utils.Clock;
@@ -215,32 +216,28 @@ public class CastActivity extends PlaybackActivity implements CustomKeyDownVod.L
         start();
     }
 
-    private void onChoose() {
+    private void onPlayerKernel() {
         if (player().isEmpty()) return;
-        String[] kernel = ResUtil.getStringArray(R.array.select_player_kernel);
-        String[] items = new String[kernel.length + 1];
-        System.arraycopy(kernel, 0, items, 0, kernel.length);
-        items[kernel.length] = "外调";
-        new androidx.appcompat.app.AlertDialog.Builder(this).setItems(items, (dialog, which) -> {
-            if (which < kernel.length) {
-                position = player().getPosition();
-                player().switchPlayerManually(which);
-                setPlayerKernel();
-                setDecode();
-            } else {
-                PlayerHelper.choose(this, player().getUrl(), player().getHeaders(), player().isVod(), player().getPosition(), mBinding.widget.title.getText());
-                setRedirect(true);
-            }
-        }).show();
+        PlayerKernelDialog.show(this, player().getPlayerType(), this::switchPlayerKernel, this::onExternalPlayer);
     }
 
-    private void onPlayerKernel() {
-        onChoose();
+    private void onExternalPlayer() {
+        if (player().isEmpty()) return;
+        PlayerHelper.choose(this, player().getUrl(), player().getHeaders(), player().isVod(), player().getPosition(), mBinding.widget.title.getText());
+        setRedirect(true);
     }
 
     private boolean onPlayerKernelLong() {
         onPlayerKernel();
         return true;
+    }
+
+    private void switchPlayerKernel(int type) {
+        if (player().isEmpty()) return;
+        position = player().getPosition();
+        player().switchPlayer(type);
+        setPlayerKernel();
+        setDecode();
     }
 
     private void onDecode() {
@@ -270,7 +267,7 @@ public class CastActivity extends PlaybackActivity implements CustomKeyDownVod.L
     private void hideProgress() {
         mBinding.progress.getRoot().setVisibility(View.GONE);
         App.removeCallbacks(mR2);
-        Traffic.reset();
+        Traffic.reset(mBinding.progress.traffic);
     }
 
     private void showError(String text) {
@@ -313,7 +310,7 @@ public class CastActivity extends PlaybackActivity implements CustomKeyDownVod.L
     }
 
     private void setTraffic() {
-        Traffic.setSpeed(mBinding.progress.traffic);
+        Traffic.setSpeed(mBinding.progress.traffic, service() == null ? null : player());
         App.post(mR2, 1000);
     }
 

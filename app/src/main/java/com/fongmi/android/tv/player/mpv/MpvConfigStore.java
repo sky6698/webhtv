@@ -84,6 +84,33 @@ public final class MpvConfigStore {
         }
     }
 
+    public static String getOptionValue(String name) {
+        if (TextUtils.isEmpty(name)) return "";
+        try {
+            return findOptionValue(readText(configFile()), name);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    static String findOptionValue(String content, String name) {
+        if (content == null || name == null) return "";
+        String expected = name.trim().toLowerCase(Locale.ROOT);
+        String result = "";
+        for (String raw : content.split("\\r?\\n")) {
+            String line = raw.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
+            int comment = line.indexOf('#');
+            if (comment >= 0) line = line.substring(0, comment).trim();
+            if (line.startsWith("--")) line = line.substring(2);
+            int separator = line.indexOf('=');
+            if (separator <= 0) continue;
+            String option = line.substring(0, separator).trim().toLowerCase(Locale.ROOT);
+            if (expected.equals(option)) result = line.substring(separator + 1).trim();
+        }
+        return result;
+    }
+
     static boolean containsGpuVideoProcessing(String content) {
         if (content == null || content.isEmpty()) return false;
         String[] lines = content.split("\\r?\\n");
@@ -913,18 +940,18 @@ public final class MpvConfigStore {
         if (!dir.exists()) dir.mkdirs();
     }
 
-    private static String defaultConfig() {
+    static String defaultConfig() {
         return "# WebHTV MPV default config\n"
                 + "# Loaded by libmpv from files/mpv/mpv.conf. Keep Android-only output options in app code.\n"
                 + "\n"
                 + "profile=fast\n"
                 + "http-allow-redirect=yes\n"
                 + "sub-ass=yes\n"
-                + "sub-ass-override=yes\n"
+                + "sub-ass-override=" + MpvSubtitleStylePolicy.ASS_OVERRIDE + "\n"
                 + "embeddedfonts=yes\n"
                 + "sub-fix-timing=yes\n"
                 + "sub-use-margins=yes\n"
-                + "sub-font-provider=none\n"
+                + "sub-font-provider=fontconfig\n"
                 + "volume-max=100\n";
     }
 

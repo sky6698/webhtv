@@ -73,6 +73,7 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
                 parent.control.fullscreen,
                 parent.control.action.player,
                 parent.control.action.decode,
+                parent.control.action.playParams,
                 parent.control.action.speed,
                 parent.control.action.scale,
                 parent.control.action.lut,
@@ -97,6 +98,7 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
                 activity.inlineControlDialogControl(R.id.fullscreen),
                 activity.inlineControlDialogAction(R.id.player),
                 activity.inlineControlDialogAction(R.id.decode),
+                null,
                 activity.inlineControlDialogAction(R.id.speed),
                 activity.inlineControlDialogAction(R.id.scale),
                 activity.inlineControlDialogLutView(),
@@ -202,6 +204,10 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
             }
 
             @Override
+            public void onPlayParamsPanel() {
+            }
+
+            @Override
             public void onImmersiveAudioModeChanged() {
             }
 
@@ -281,7 +287,7 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         setSheetBackground();
         binding.decode.setText(controls.decode.getText());
         setLut();
-binding.ending.setText(controls.ending.getText());
+        binding.ending.setText(controls.ending.getText());
         binding.opening.setText(controls.opening.getText());
         binding.repeat.setSelected(controls.repeat.isSelected());
         binding.immersiveAudio.setSelected(PlayerSetting.isImmersiveAudioMode());
@@ -315,7 +321,6 @@ binding.ending.setText(controls.ending.getText());
             displays.get(i).setOnClickListener(v -> toggleDisplaySetting(index));
         }
         binding.reset.setOnClickListener(v -> dismiss(controls.reset));
-        binding.fullscreen.setOnClickListener(v -> dismiss(controls.fullscreen));
         binding.text.setOnClickListener(v -> onTrack(binding.text));
         binding.audio.setOnClickListener(v -> onTrack(binding.audio));
         binding.video.setOnClickListener(v -> onTrack(binding.video));
@@ -482,10 +487,14 @@ if (binding == null || controls == null || player == null) return;
         binding.reset.setText(controls.reset.getText());
         setLut();
         setEpisodeColumn();
+        // 播放失败回退会同时改内核和软硬解，两个标签都得跟着宿主刷新，否则弹窗里只有内核在变。
+        binding.decode.setText(controls.decode.getText());
         binding.decode.setVisibility(controls.decode.getVisibility());
         binding.danmaku.setVisibility(controls.danmaku.getVisibility());
         setImmersiveAudioVisible();
-        setTrackVisible();
+        // setTitleVisible 会带上 setTrackVisible；章节可见性也参与轨道行的计算，
+        // 只抄轨道不抄章节的话，回退后弹窗会拿旧章节状态算出错的轨道行。
+        setTitleVisible();
     }
 
     public void setLut() {
@@ -615,6 +624,7 @@ if (binding == null || controls == null || player == null) return;
         private final View fullscreen;
         private final TextView player;
         private final TextView decode;
+        private final TextView playParams;
         private final TextView speed;
         private final TextView scale;
         private final TextView lut;
@@ -629,12 +639,13 @@ if (binding == null || controls == null || player == null) return;
         private final TextView title;
         private final TextView episodes;
 
-        private Controls(View root, View video, View fullscreen, TextView player, TextView decode, TextView speed, TextView scale, TextView lut, TextView reset, TextView repeat, TextView text, TextView audio, TextView videoTrack, TextView opening, TextView ending, TextView danmaku, TextView title, TextView episodes) {
+        private Controls(View root, View video, View fullscreen, TextView player, TextView decode, TextView playParams, TextView speed, TextView scale, TextView lut, TextView reset, TextView repeat, TextView text, TextView audio, TextView videoTrack, TextView opening, TextView ending, TextView danmaku, TextView title, TextView episodes) {
             this.root = root;
             this.video = video;
             this.fullscreen = fullscreen;
             this.player = player;
             this.decode = decode;
+            this.playParams = playParams;
             this.speed = speed;
             this.scale = scale;
             this.lut = lut;
@@ -697,5 +708,7 @@ if (binding == null || controls == null || player == null) return;
         void onKaraokeTrackPanel();
 
         void onCodecCapabilityPanel();
+
+        void onPlayParamsPanel();
     }
 }

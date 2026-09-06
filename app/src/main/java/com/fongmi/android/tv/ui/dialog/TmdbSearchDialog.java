@@ -48,6 +48,7 @@ public class TmdbSearchDialog {
     private String title;
     private String query;
     private List<TmdbItem> items;
+    private TmdbItem selectedItem;
     private Listener listener;
     private SearchListener searchListener;
     private SkipListener skipListener;
@@ -74,6 +75,11 @@ public class TmdbSearchDialog {
 
     public TmdbSearchDialog query(String query) {
         this.query = query;
+        return this;
+    }
+
+    public TmdbSearchDialog selectedItem(TmdbItem selectedItem) {
+        this.selectedItem = selectedItem;
         return this;
     }
 
@@ -110,6 +116,7 @@ public class TmdbSearchDialog {
             dialog.dismiss();
         });
         binding.recycler.setAdapter(adapter);
+        adapter.setSelectedItem(selectedItem);
         adapter.setItems(items == null ? Collections.emptyList() : items);
         focusInitialTarget();
     }
@@ -125,23 +132,31 @@ public class TmdbSearchDialog {
         setLoading(false);
         updateStatus();
         if (adapter != null) adapter.setItems(items == null ? Collections.emptyList() : items);
-        focusFirstResult();
+        focusInitialTarget();
     }
 
     private void configureWindow() {
         DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
         boolean landscape = metrics.widthPixels > metrics.heightPixels;
-        int chromeHeight = dp(searchListener != null ? 250 : 180);
-        int listHeight = Math.min(dp(320), Math.max(dp(180), metrics.heightPixels - chromeHeight));
+        boolean leanback = Util.isLeanback();
+        int chromeHeight = dp(searchListener != null ? (leanback ? 300 : 250) : (leanback ? 220 : 180));
+        int availableListHeight = Math.max(1, metrics.heightPixels - chromeHeight);
+        int minimumListHeight = Math.min(dp(leanback ? 240 : 180), availableListHeight);
+        int preferredListHeight = leanback
+                ? Math.round(metrics.heightPixels * 0.52f)
+                : dp(320);
+        int listHeight = Math.max(minimumListHeight, Math.min(availableListHeight, preferredListHeight));
         ViewGroup.LayoutParams params = binding.recycler.getLayoutParams();
         params.height = listHeight;
         binding.recycler.setLayoutParams(params);
 
         Window window = dialog.getWindow();
         if (window == null) return;
-        int horizontalMargin = dp(landscape ? 96 : 32);
-        int availableWidth = Math.max(dp(280), metrics.widthPixels - horizontalMargin);
-        int dialogWidth = Math.min(dp(760), Math.min(metrics.widthPixels - dp(16), availableWidth));
+        int horizontalMargin = dp(landscape ? (leanback ? 64 : 96) : 32);
+        int availableWidth = Math.max(1, metrics.widthPixels - horizontalMargin);
+        int minimumWidth = Math.min(dp(leanback ? 720 : 280), availableWidth);
+        int preferredWidth = leanback ? Math.round(metrics.widthPixels * 0.88f) : dp(760);
+        int dialogWidth = Math.max(minimumWidth, Math.min(preferredWidth, availableWidth));
         window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         window.setDimAmount(0);
@@ -184,7 +199,7 @@ public class TmdbSearchDialog {
                 return true;
             }
             if (KeyUtil.isRightKey(event) && isCursorAtEnd()) return binding.querySearch.requestFocus();
-            if (KeyUtil.isDownKey(event)) return focusFirstResult();
+            if (KeyUtil.isDownKey(event)) return focusPreferredResult();
             if (Util.isLeanback()) return false;
             return false;
         });
@@ -226,14 +241,26 @@ public class TmdbSearchDialog {
     }
 
     private void focusInitialTarget() {
-        if (items != null && !items.isEmpty() && focusFirstResult()) return;
+        if (focusPreferredResult()) return;
         if (searchListener != null) binding.query.requestFocus();
     }
 
-    private boolean focusFirstResult() {
-        if (adapter == null || adapter.getItemCount() == 0) return false;
+    private boolean focusPreferredResult() {
+        int position = adapter == null ? RecyclerView.NO_POSITION : adapter.getSelectedPosition();
+        if (position == RecyclerView.NO_POSITION) position = 0;
+        return focusResult(position);
+    }
+
+    private boolean focusResult(int position) {
+        if (adapter == null || position < 0 || position >= adapter.getItemCount()) return false;
+        RecyclerView.LayoutManager manager = binding.recycler.getLayoutManager();
+        if (manager instanceof LinearLayoutManager linearLayoutManager) {
+            linearLayoutManager.scrollToPositionWithOffset(position, 0);
+        } else {
+            binding.recycler.scrollToPosition(position);
+        }
         binding.recycler.post(() -> {
-            RecyclerView.ViewHolder holder = binding.recycler.findViewHolderForAdapterPosition(0);
+            RecyclerView.ViewHolder holder = binding.recycler.findViewHolderForAdapterPosition(position);
             if (holder != null) holder.itemView.requestFocus();
             else binding.recycler.requestFocus();
         });

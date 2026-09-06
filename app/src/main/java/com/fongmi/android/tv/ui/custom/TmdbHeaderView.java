@@ -21,15 +21,20 @@ import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.bean.TmdbItem;
+import com.fongmi.android.tv.bean.TmdbVideo;
 import com.fongmi.android.tv.setting.Setting;
+import com.fongmi.android.tv.service.OmdbService;
 import com.fongmi.android.tv.service.PersonalRecommendationService;
 import com.fongmi.android.tv.ui.adapter.TmdbCastAdapter;
+import com.fongmi.android.tv.ui.adapter.TmdbVideoAdapter;
 import com.fongmi.android.tv.ui.helper.TmdbUIAdapter;
+import com.fongmi.android.tv.ui.helper.TmdbVideoPlayback;
 import com.fongmi.android.tv.ui.helper.TmdbDetailLabels;
 import com.fongmi.android.tv.ui.helper.TmdbNavigation;
 import com.fongmi.android.tv.ui.helper.TmdbCinemaTheme;
 import com.fongmi.android.tv.utils.ImgUtil;
 import com.fongmi.android.tv.utils.ResUtil;
+import com.fongmi.android.tv.utils.Task;
 import com.fongmi.android.tv.utils.TmdbImageSelector;
 import com.google.android.flexbox.FlexboxLayout;
 import com.google.android.material.button.MaterialButton;
@@ -71,8 +76,10 @@ public class TmdbHeaderView {
             R.id.tmdbCastLabel,
             R.id.tmdbCrewLabel,
             R.id.tmdbPhotosLabel,
+            R.id.tmdbPostersLabel,
             R.id.tmdbExternalLinksLabel,
             R.id.tmdbRecommendationsLabel,
+            R.id.tmdbRelatedVideosLabel,
             R.id.tmdbPersonalTmdbRecommendationsLabel,
             R.id.tmdbPersonalDoubanRecommendationsLabel,
             R.id.tmdbPersonalAiRecommendationsLabel,
@@ -100,19 +107,24 @@ public class TmdbHeaderView {
 
         void onRematch();
 
+        default void onRematchLongClick() { onRematch(); }
+
         void onKeep();
     }
 
     private final Activity activity;
     private final ViewGroup scrollContainer;
+    private final Task.Scope backgroundTasks = new Task.Scope(Task.recommendationExecutor());
     private View headerRoot;
     private TmdbCastAdapter castAdapter;
     private com.fongmi.android.tv.ui.adapter.TmdbPhotoAdapter photoAdapter;
+    private com.fongmi.android.tv.ui.adapter.TmdbPhotoAdapter posterAdapter;
     private TmdbCastAdapter crewAdapter;
     private com.fongmi.android.tv.ui.adapter.TmdbRecommendationAdapter personalTmdbRecommendationAdapter;
     private com.fongmi.android.tv.ui.adapter.TmdbRecommendationAdapter personalDoubanRecommendationAdapter;
     private com.fongmi.android.tv.ui.adapter.TmdbRecommendationAdapter personalAiRecommendationAdapter;
     private com.fongmi.android.tv.ui.adapter.TmdbRecommendationAdapter recommendationAdapter;
+    private TmdbVideoAdapter relatedVideoAdapter;
     private TmdbUIAdapter boundAdapter;
     private boolean loadingRecommendations;
     private boolean loadingPersonalTmdbRecommendations;
@@ -234,6 +246,7 @@ public class TmdbHeaderView {
             return;
         }
 
+        backgroundTasks.cancelAll();
         android.util.Log.d("TmdbHeaderView", "bind() 开始，标题=" + item.getTitle());
         boundAdapter = adapter;
         applyTheme();
@@ -318,14 +331,27 @@ public class TmdbHeaderView {
         }
 
         // 剧照
-        if (!adapter.getPhotos().isEmpty()) {
+        java.util.List<String> photos = adapter.getPhotos();
+        if (!photos.isEmpty()) {
             headerRoot.findViewById(R.id.tmdbPhotosLabel).setVisibility(View.VISIBLE);
             RecyclerView photosRv = headerRoot.findViewById(R.id.tmdbPhotos);
             photosRv.setVisibility(View.VISIBLE);
-            photoAdapter.setItems(adapter.getPhotos());
+            photoAdapter.setItems(photos);
         } else {
             headerRoot.findViewById(R.id.tmdbPhotosLabel).setVisibility(View.GONE);
             headerRoot.findViewById(R.id.tmdbPhotos).setVisibility(View.GONE);
+        }
+
+        // 海报
+        java.util.List<String> posters = adapter.getPosters();
+        if (!posters.isEmpty()) {
+            headerRoot.findViewById(R.id.tmdbPostersLabel).setVisibility(View.VISIBLE);
+            RecyclerView postersRv = headerRoot.findViewById(R.id.tmdbPosters);
+            postersRv.setVisibility(View.VISIBLE);
+            posterAdapter.setItems(posters);
+        } else {
+            headerRoot.findViewById(R.id.tmdbPostersLabel).setVisibility(View.GONE);
+            headerRoot.findViewById(R.id.tmdbPosters).setVisibility(View.GONE);
         }
 
         // 主创团队
@@ -354,6 +380,8 @@ public class TmdbHeaderView {
         }
 
         // 个性推荐
+        bindRelatedVideoRow(adapter.getRelatedVideos());
+
         bindRecommendationRow(R.id.tmdbPersonalTmdbRecommendationsLabel, R.id.tmdbPersonalTmdbRecommendations, personalTmdbRecommendationAdapter, adapter.getPersonalTmdbRecommendations());
         bindRecommendationRow(R.id.tmdbPersonalDoubanRecommendationsLabel, R.id.tmdbPersonalDoubanRecommendations, personalDoubanRecommendationAdapter, adapter.getPersonalDoubanRecommendations());
         bindPersonalAiRecommendationRow(adapter.getPersonalAiRecommendations());
@@ -373,6 +401,8 @@ public class TmdbHeaderView {
      * 移除头部面板（切换回普通模式时）。
      */
     public void remove() {
+        backgroundTasks.cancelAll();
+        stopBackdropSlideshow();
         if (headerRoot != null && headerRoot.getParent() == scrollContainer) {
             scrollContainer.removeView(headerRoot);
             headerRoot = null;
@@ -384,6 +414,44 @@ public class TmdbHeaderView {
      */
     public void show() {
         if (headerRoot != null) headerRoot.setVisibility(View.VISIBLE);
+    }
+
+
+    public void refreshRecommendations() {
+        if (boundAdapter == null || headerRoot == null || recommendationAdapter == null) return;
+        bindRecommendationRow(R.id.tmdbRecommendationsLabel, R.id.tmdbRecommendations, recommendationAdapter, boundAdapter.getRecommendations());
+    }
+
+    public void refreshRelatedVideos() {
+        if (boundAdapter == null || headerRoot == null || relatedVideoAdapter == null) return;
+        bindRelatedVideoRow(boundAdapter.getRelatedVideos());
+    }
+
+    public void refreshPersonalRecommendationRows() {
+        if (boundAdapter == null || headerRoot == null) return;
+        bindRecommendationRow(R.id.tmdbPersonalTmdbRecommendationsLabel, R.id.tmdbPersonalTmdbRecommendations, personalTmdbRecommendationAdapter, boundAdapter.getPersonalTmdbRecommendations());
+        bindRecommendationRow(R.id.tmdbPersonalDoubanRecommendationsLabel, R.id.tmdbPersonalDoubanRecommendations, personalDoubanRecommendationAdapter, boundAdapter.getPersonalDoubanRecommendations());
+        bindPersonalAiRecommendationRow(boundAdapter.getPersonalAiRecommendations());
+    }
+
+    public void refreshEpisodeMetadata() {
+        if (boundAdapter == null || headerRoot == null) return;
+        TmdbItem item = boundAdapter.getTmdbItem();
+        JsonObject detail = boundAdapter.getTmdbDetail();
+        if (item == null || detail == null) return;
+        TextView meta = headerRoot.findViewById(R.id.tmdbMeta);
+        String mediaType = "tv".equals(item.getMediaType())
+                ? activity.getString(R.string.detail_media_tv)
+                : activity.getString(R.string.detail_media_movie);
+        String year = extractYear(detail);
+        String episodeInfo = boundAdapter.getEpisodeDetailText();
+        List<String> metaParts = new ArrayList<>();
+        metaParts.add(mediaType);
+        if (!TextUtils.isEmpty(year)) metaParts.add(year);
+        if (!TextUtils.isEmpty(episodeInfo)) metaParts.add(episodeInfo);
+        meta.setText(TextUtils.join(" · ", metaParts));
+        TextView fusionSubtitle = headerRoot.findViewById(R.id.tmdbFusionSubtitle);
+        if (fusionSubtitle != null) fusionSubtitle.setText(buildFusionSubtitle(detail, boundAdapter.getRatingText(), episodeInfo));
     }
 
     public void refreshPersonalRecommendations() {
@@ -411,6 +479,11 @@ public class TmdbHeaderView {
         photoAdapter.setOnItemClickListener(this::onPhotoClick);
         photosRv.setAdapter(photoAdapter);
 
+        RecyclerView postersRv = headerRoot.findViewById(R.id.tmdbPosters);
+        posterAdapter = new com.fongmi.android.tv.ui.adapter.TmdbPhotoAdapter(true);
+        posterAdapter.setOnItemClickListener(this::onPosterClick);
+        postersRv.setAdapter(posterAdapter);
+
         RecyclerView crewRv = headerRoot.findViewById(R.id.tmdbCrew);
         crewAdapter = new TmdbCastAdapter();
         crewAdapter.setOnItemClickListener(this::onPersonClick);
@@ -437,6 +510,11 @@ public class TmdbHeaderView {
         personalAiRecommendationAdapter.setOnItemFocusListener(this::showAiRecommendationReason);
         personalAiRecommendationsRv.setAdapter(personalAiRecommendationAdapter);
 
+        RecyclerView relatedVideosRv = headerRoot.findViewById(R.id.tmdbRelatedVideos);
+        relatedVideoAdapter = new TmdbVideoAdapter();
+        relatedVideoAdapter.setOnItemClickListener(this::onRelatedVideoClick);
+        relatedVideosRv.setAdapter(relatedVideoAdapter);
+
         RecyclerView recommendationsRv = headerRoot.findViewById(R.id.tmdbRecommendations);
         recommendationAdapter = new com.fongmi.android.tv.ui.adapter.TmdbRecommendationAdapter();
         recommendationAdapter.setOnItemClickListener(this::onRecommendationClick);
@@ -458,6 +536,18 @@ public class TmdbHeaderView {
         personalAiRecommendationAdapter.removeItem(item);
         showAiRecommendationReason(item, false);
         refreshPersonalRecommendations();
+    }
+
+    private void bindRelatedVideoRow(List<TmdbVideo> items) {
+        if (items != null && !items.isEmpty()) {
+            headerRoot.findViewById(R.id.tmdbRelatedVideosLabel).setVisibility(View.VISIBLE);
+            headerRoot.findViewById(R.id.tmdbRelatedVideos).setVisibility(View.VISIBLE);
+            relatedVideoAdapter.setItems(items);
+        } else {
+            relatedVideoAdapter.setItems(new ArrayList<>());
+            headerRoot.findViewById(R.id.tmdbRelatedVideosLabel).setVisibility(View.GONE);
+            headerRoot.findViewById(R.id.tmdbRelatedVideos).setVisibility(View.GONE);
+        }
     }
 
     private void bindRecommendationRow(int labelId, int recyclerId, com.fongmi.android.tv.ui.adapter.TmdbRecommendationAdapter adapter, List<TmdbItem> items) {
@@ -550,8 +640,14 @@ public class TmdbHeaderView {
             if (actionListener != null) actionListener.onChangeSourceLongClick();
             return true;
         });
-        headerRoot.findViewById(R.id.tmdbRematch).setOnClickListener(view -> {
+        View rematch = headerRoot.findViewById(R.id.tmdbRematch);
+        rematch.setOnClickListener(view -> {
             if (actionListener != null) actionListener.onRematch();
+        });
+        rematch.setOnLongClickListener(view -> {
+            if (actionListener == null) return false;
+            actionListener.onRematchLongClick();
+            return true;
         });
         headerRoot.findViewById(R.id.tmdbKeep).setOnClickListener(view -> {
             if (actionListener != null) actionListener.onKeep();
@@ -576,6 +672,13 @@ public class TmdbHeaderView {
         com.fongmi.android.tv.ui.dialog.PhotoViewerDialog.show(activity, photos, position, null);
     }
 
+
+    private void onPosterClick(String url, int position) {
+        if (TextUtils.isEmpty(url)) return;
+        java.util.List<String> posters = posterAdapter.getItems();
+        com.fongmi.android.tv.ui.dialog.PhotoViewerDialog.show(activity, posters, position, null);
+    }
+
     /**
      * 点击演员/主创：显示简介弹窗。
      */
@@ -589,6 +692,10 @@ public class TmdbHeaderView {
      */
     private void onRecommendationClick(TmdbItem item) {
         TmdbNavigation.open(activity, item, currentSite());
+    }
+
+    private void onRelatedVideoClick(TmdbVideo item) {
+        TmdbVideoPlayback.play(activity, item);
     }
 
     private com.fongmi.android.tv.bean.Site currentSite() {
@@ -632,7 +739,7 @@ public class TmdbHeaderView {
         }
         TextView source = headerRoot.findViewById(R.id.tmdbFusionSource);
         if (source != null) {
-            String siteName = currentSite() == null ? "" : currentSite().getName();
+            String siteName = currentSite() == null ? "" : currentSite().getDisplayName();
             source.setText(TextUtils.isEmpty(siteName) ? "" : "站源： " + siteName);
             source.setVisibility(TextUtils.isEmpty(siteName) ? View.GONE : View.VISIBLE);
         }
@@ -724,7 +831,7 @@ public class TmdbHeaderView {
 
         // 收集所有可用的背景图，优先使用已按设备方向与清晰度筛选的图片。
         backdropPhotos.clear();
-        java.util.List<String> photos = adapter.getPhotos();
+        java.util.List<String> photos = adapter.getBackgroundPhotos();
         android.util.Log.d("TmdbHeaderView", "setupBackdropSlideshow: photos count=" + (photos != null ? photos.size() : 0));
         if (photos != null) {
             for (String photo : photos) {
@@ -734,11 +841,6 @@ public class TmdbHeaderView {
                 }
             }
         }
-        String mainBackdrop = TmdbImageSelector.originalUrl(item.getBackdropUrl());
-        if (!TextUtils.isEmpty(mainBackdrop) && !backdropPhotos.contains(mainBackdrop)) {
-            backdropPhotos.add(mainBackdrop);
-        }
-
         android.util.Log.d("TmdbHeaderView", "setupBackdropSlideshow: total backdropPhotos=" + backdropPhotos.size());
 
         // 如果只有一张图，直接加载
@@ -944,21 +1046,10 @@ public class TmdbHeaderView {
     }
 
     private void fetchRatingChipsForDisplay(String imdbId, String omdbApiKey, String cacheKey, String displayKey, ViewGroup container) {
-        com.fongmi.android.tv.utils.Task.execute(() -> {
+        backgroundTasks.submit(() -> {
             try {
-                String url = "https://www.omdbapi.com/?i=" + imdbId + "&apikey=" + omdbApiKey;
-                okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
-                        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                        .build();
-                okhttp3.Request request = new okhttp3.Request.Builder().url(url).build();
-                okhttp3.Response response = client.newCall(request).execute();
-                if (!response.isSuccessful() || response.code() != 200) return;
-                if (response.body() == null) return;
-
-                String json = response.body().string();
-                com.google.gson.JsonObject jsonObj = new com.google.gson.JsonParser().parse(json).getAsJsonObject();
-                if (jsonObj.has("Response") && "False".equals(jsonObj.get("Response").getAsString())) return;
+                JsonObject jsonObj = OmdbService.fetch(imdbId, omdbApiKey);
+                if (jsonObj == null || jsonObj.has("Response") && "False".equals(jsonObj.get("Response").getAsString())) return;
 
                 List<String[]> omdbChips = buildRatingChips(jsonObj);
                 putCachedOmdbRatingChips(cacheKey, omdbChips);
@@ -984,13 +1075,14 @@ public class TmdbHeaderView {
             applyDoubanRating(displayKey, container, externalRatingView, cached);
             return;
         }
-        com.fongmi.android.tv.utils.Task.execute(() -> {
+        backgroundTasks.submit(() -> {
             PersonalRecommendationService.DoubanRating rating = PersonalRecommendationService.DoubanRating.empty();
             try {
                 rating = new PersonalRecommendationService().loadDoubanRating(title, mediaType, year);
             } catch (Throwable e) {
                 android.util.Log.w("TmdbHeaderView", "获取豆瓣评分失败: " + e.getMessage());
             }
+            if (Thread.currentThread().isInterrupted()) return;
             putCachedDoubanRating(cacheKey, rating);
             PersonalRecommendationService.DoubanRating finalRating = rating;
             activity.runOnUiThread(() -> {
@@ -1206,23 +1298,13 @@ public class TmdbHeaderView {
      * 异步请求 OMDB 并渲染多来源评分。匹配不到数据时保持隐藏。
      */
     private void fetchOmdbRatings(String imdbId, String omdbApiKey, String cacheKey, com.google.android.material.textview.MaterialTextView label, View scroll, ViewGroup container) {
-        com.fongmi.android.tv.utils.Task.execute(() -> {
+        backgroundTasks.submit(() -> {
             try {
-                String url = "https://www.omdbapi.com/?i=" + imdbId + "&apikey=" + omdbApiKey;
-                okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
-                        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                        .build();
-                okhttp3.Request request = new okhttp3.Request.Builder().url(url).build();
-                okhttp3.Response response = client.newCall(request).execute();
-                if (!response.isSuccessful() || response.code() != 200 || response.body() == null) {
-                    android.util.Log.w("TmdbHeaderView", "OMDB 请求失败，code=" + response.code());
+                JsonObject jsonObj = OmdbService.fetch(imdbId, omdbApiKey);
+                if (jsonObj == null) {
+                    android.util.Log.w("TmdbHeaderView", "OMDB 请求失败");
                     return;
                 }
-
-                String json = response.body().string();
-                android.util.Log.d("TmdbHeaderView", "OMDB 响应: " + json.substring(0, Math.min(300, json.length())));
-                JsonObject jsonObj = new com.google.gson.JsonParser().parse(json).getAsJsonObject();
                 if (jsonObj.has("Response") && "False".equals(jsonObj.get("Response").getAsString())) {
                     android.util.Log.w("TmdbHeaderView", "OMDB 返回 Response=False");
                     return;
@@ -1468,6 +1550,7 @@ public class TmdbHeaderView {
         setTextColor(R.id.tmdbCastLabel, primary);
         setTextColor(R.id.tmdbCrewLabel, primary);
         setTextColor(R.id.tmdbPhotosLabel, primary);
+        setTextColor(R.id.tmdbPostersLabel, primary);
         setTextColor(R.id.tmdbExternalLinksLabel, primary);
         setTextColor(R.id.tmdbRecommendationsLabel, primary);
         setTextColor(R.id.tmdbPersonalTmdbRecommendationsLabel, primary);
@@ -1676,6 +1759,10 @@ public class TmdbHeaderView {
         setTopMargin(R.id.tmdbCrew, 12);
         setTopMargin(R.id.tmdbPhotosLabel, 24);
         setTopMargin(R.id.tmdbPhotos, 12);
+        setTopMargin(R.id.tmdbPostersLabel, 24);
+        setTopMargin(R.id.tmdbPosters, 12);
+        setTopMargin(R.id.tmdbRelatedVideosLabel, 24);
+        setTopMargin(R.id.tmdbRelatedVideos, 12);
         setTopMargin(R.id.tmdbExternalLinksLabel, 24);
         setTopMargin(R.id.tmdbExternalLinks, 12);
         setTopMargin(R.id.tmdbRecommendationsLabel, 24);
@@ -2163,20 +2250,10 @@ public class TmdbHeaderView {
                                           com.google.android.material.textview.MaterialTextView imdbRatingView,
                                           com.google.android.material.textview.MaterialTextView rottenRatingView,
                                           com.google.android.material.textview.MaterialTextView metacriticRatingView) {
-        com.fongmi.android.tv.utils.Task.execute(() -> {
+        backgroundTasks.submit(() -> {
             try {
-                String url = "https://www.omdbapi.com/?i=" + imdbId + "&apikey=" + omdbApiKey;
-                okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
-                        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                        .build();
-                okhttp3.Request request = new okhttp3.Request.Builder().url(url).build();
-                okhttp3.Response response = client.newCall(request).execute();
-                if (!response.isSuccessful() || response.code() != 200 || response.body() == null) return;
-
-                String json = response.body().string();
-                JsonObject jsonObj = new com.google.gson.JsonParser().parse(json).getAsJsonObject();
-                if (jsonObj.has("Response") && "False".equals(jsonObj.get("Response").getAsString())) return;
+                JsonObject jsonObj = OmdbService.fetch(imdbId, omdbApiKey);
+                if (jsonObj == null || jsonObj.has("Response") && "False".equals(jsonObj.get("Response").getAsString())) return;
 
                 String imdbRating = "";
                 String rottenRating = "";
@@ -2304,9 +2381,14 @@ public class TmdbHeaderView {
      * 清理资源（Activity 销毁时调用）
      */
     public void onDestroy() {
+        backgroundTasks.close();
         stopBackdropSlideshow();
         backdropHandler = null;
         backdropRunnable = null;
+        boundAdapter = null;
+        imagesLoadedListener = null;
+        backdropChangeListener = null;
+        actionListener = null;
     }
 
     /**

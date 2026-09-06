@@ -23,6 +23,7 @@ import androidx.media3.session.SessionCommand;
 import androidx.media3.session.SessionCommands;
 import androidx.media3.session.SessionError;
 import androidx.media3.session.SessionResult;
+import androidx.media3.session.SessionToken;
 
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.BuildConfig;
@@ -106,6 +107,11 @@ private AudioHistory.Record audioHistoryRecord;
         onNewBinding = callback;
     }
 
+    @Nullable
+    public SessionToken getSessionToken() {
+        return session == null ? null : session.getToken();
+    }
+
     public PlayerManager player() {
         return player;
     }
@@ -147,6 +153,8 @@ private AudioHistory.Record audioHistoryRecord;
         EventBus.getDefault().register(this);
         Server.get().setService(this);
         setupNotification();
+        // Direct SessionToken controllers bypass MediaSessionService binding, so register the session for media notifications.
+        addSession(session);
         if (SpiderDebug.isEnabled()) SpiderDebug.log("playback-flow", "service onCreate end cost=%dms", System.currentTimeMillis() - start);
     }
 
@@ -234,6 +242,7 @@ private AudioHistory.Record audioHistoryRecord;
         running = false;
         syncAudioHistoryProgress(true);
         clearAudioHistoryRecord();
+        player.prepareTerminalRelease();
         PlaybackEventCollector.get().onStop(player);
         if (desktopLyrics != null) desktopLyrics.release();
         releaseSession();
@@ -267,6 +276,7 @@ private AudioHistory.Record audioHistoryRecord;
         keepAlive = false;
         syncAudioHistoryProgress(true);
         clearAudioHistoryRecord();
+        player.prepareTerminalRelease();
         stopAndClear();
         removeForeground();
         stopSelf();
@@ -410,6 +420,7 @@ private AudioHistory.Record audioHistoryRecord;
     }
 
     public void setPlaybackForeground(boolean foreground) {
+        if (player != null) player.setPlaybackForeground(foreground);
         if (desktopLyrics != null) desktopLyrics.setForeground(foreground);
     }
 
@@ -428,6 +439,11 @@ private AudioHistory.Record audioHistoryRecord;
     public void setNavigationCallback(NavigationCallback navigationCallback, String key) {
         this.navigationCallback = navigationCallback;
         this.navigationKey = key;
+    }
+
+    public void clearNavigationCallback(NavigationCallback expected) {
+        if (navigationCallback != expected) return;
+        setNavigationCallback(null, null);
     }
 
     private boolean isNavigationOwner() {
@@ -488,7 +504,9 @@ private AudioHistory.Record audioHistoryRecord;
 
     private void dispatch(Consumer<NavigationCallback> action) {
         NavigationCallback callback = navigationCallback;
-        if (callback != null) App.post(() -> action.accept(callback));
+        if (callback != null) App.post(() -> {
+            if (navigationCallback == callback) action.accept(callback);
+        });
     }
 
     private void navigateItem(int delta) {
@@ -639,6 +657,26 @@ private AudioHistory.Record audioHistoryRecord;
     }
 
     @Override
+    public void onPlayerRenderRequired() {
+        playerCallbacks.forEach(PlayerCallback::onPlayerRenderRequired);
+    }
+
+    @Override
+    public void onPlayerOutputPending() {
+        playerCallbacks.forEach(PlayerCallback::onPlayerOutputPending);
+    }
+
+    @Override
+    public void onPlayerOutputReady() {
+        playerCallbacks.forEach(PlayerCallback::onPlayerOutputReady);
+    }
+
+    @Override
+    public void onExoFirstFrame() {
+        playerCallbacks.forEach(PlayerCallback::onExoFirstFrame);
+    }
+
+    @Override
     public void onPlayerRebuild(Player newPlayer, boolean resetVideoSurface) {
         exoPlayer.removeListener(listener);
         exoPlayer = newPlayer;
@@ -667,9 +705,9 @@ public void onIsPlayingChanged(boolean isPlaying) {
             }
             if (state == Player.STATE_ENDED) {
                 syncAudioHistoryProgress(true);
-                if (SpiderDebug.isEnabled()) SpiderDebug.log("audio-auto-next", "service ended owner=%s navigation=%s key=%s navigationKey=%s", isNavigationOwner(), hasNavigationCallback(), player.getKey(), navigationKey);
-                if (hasNavigationCallback() && isNavigationOwner()) dispatchNext();
-                else navigateItem(1);
+                boolean ownerHandlesNavigation = hasNavigationCallback() && isNavigationOwner();
+                if (SpiderDebug.isEnabled()) SpiderDebug.log("audio-auto-next", "service ended owner=%s navigation=%s key=%s navigationKey=%s action=%s", isNavigationOwner(), hasNavigationCallback(), player.getKey(), navigationKey, ownerHandlesNavigation ? "defer-to-owner" : "browse-next");
+                if (!ownerHandlesNavigation) navigateItem(1);
             }
         }
 
@@ -745,6 +783,18 @@ public void onIsPlayingChanged(boolean isPlaying) {
         }
 
         default void onReload(String msg) {
+        }
+
+        default void onPlayerRenderRequired() {
+        }
+
+        default void onPlayerOutputPending() {
+        }
+
+        default void onPlayerOutputReady() {
+        }
+
+        default void onExoFirstFrame() {
         }
 
         default void onPlayerRebuild(Player player, boolean resetVideoSurface) {

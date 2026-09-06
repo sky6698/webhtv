@@ -18,6 +18,7 @@ import android.widget.ScrollView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
+import androidx.leanback.widget.BaseGridView;
 import androidx.leanback.widget.OnChildViewHolderSelectedListener;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.GridLayoutManager;
@@ -31,6 +32,7 @@ import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.api.config.VodConfig;
 import com.fongmi.android.tv.bean.Collect;
 import com.fongmi.android.tv.bean.History;
+import com.fongmi.android.tv.playback.HistoryResumePayload;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.bean.Vod;
@@ -38,6 +40,7 @@ import com.fongmi.android.tv.databinding.ActivityCollectBinding;
 import com.fongmi.android.tv.model.SearchProgress;
 import com.fongmi.android.tv.model.SiteViewModel;
 import com.fongmi.android.tv.setting.Setting;
+import com.fongmi.android.tv.setting.SiteGroupOrderStore;
 import com.fongmi.android.tv.setting.SiteHealthStore;
 import com.fongmi.android.tv.ui.adapter.CollectAdapter;
 import com.fongmi.android.tv.ui.adapter.SearchAdapter;
@@ -123,7 +126,7 @@ public class CollectActivity extends BaseActivity implements CollectAdapter.OnCl
         intent.putExtra("pic", history.getVodPic());
         intent.putExtra("wallPic", history.getWallPic());
         intent.putExtra("historyResumeCid", history.getCid());
-        intent.putExtra("historyResumeKey", history.getKey());
+        intent.putExtra("historyResumeKey", HistoryResumePayload.encode(history));
         intent.putExtra("historyResumeTargetCid", targetCid);
         activity.startActivity(intent);
     }
@@ -180,6 +183,7 @@ public class CollectActivity extends BaseActivity implements CollectAdapter.OnCl
         setSites();
         updateFilterControls();
         search();
+        focusInitialSource();
     }
 
     @Override
@@ -192,6 +196,7 @@ public class CollectActivity extends BaseActivity implements CollectAdapter.OnCl
         setSearchColumn();
         updateFilterControls();
         search();
+        focusInitialSource();
     }
 
     @Override
@@ -321,7 +326,7 @@ public class CollectActivity extends BaseActivity implements CollectAdapter.OnCl
             mSites.add(site);
         }
         if (Setting.getSearchResultSort() != 1) SiteHealthStore.sortSites(mSites);
-        mGroups = TextUtils.isEmpty(siteKey) && TextUtils.isEmpty(group) ? Site.getGroups(mSites) : new ArrayList<>();
+        mGroups = TextUtils.isEmpty(siteKey) && TextUtils.isEmpty(group) ? SiteGroupOrderStore.sort(Site.getGroups(mSites)) : new ArrayList<>();
     }
 
     private boolean focusBelowTop() {
@@ -352,6 +357,15 @@ public class CollectActivity extends BaseActivity implements CollectAdapter.OnCl
         mBinding.similarityFilter.setText(value);
         mBinding.similarityFilter.setSelected(mSimilarity > 0);
         mBinding.similarityFilter.setContentDescription(getString(R.string.search_filter_similarity_description, value, getString(R.string.search_filter_similarity_hint)));
+    }
+
+    private void focusInitialSource() {
+        if (mCollectAdapter.getItemCount() == 0) {
+            mBinding.searchColumn.requestFocus();
+            return;
+        }
+        BaseGridView collect = isSearchLandscape() ? mBinding.collectHorizontal : mBinding.collect;
+        collect.setSelectedPosition(0, holder -> holder.itemView.requestFocus());
     }
 
     private void onSimilarityFilter() {
@@ -843,7 +857,7 @@ public class CollectActivity extends BaseActivity implements CollectAdapter.OnCl
             else VodActivity.start(this, item.getSiteKey(), Result.folder(item));
         } else {
             String pic = item.getPic().isEmpty() ? getPic() : item.getPic();
-            VideoActivity.collect(this, item.getSiteKey(), item.getId(), item.getName(), pic, getWallPic());
+            VideoActivity.collect(this, item.getSiteKey(), item.getId(), item.getName(), pic, getWallPic(), getKeyword());
         }
         SpiderDebug.log("collect-flow", "activity launch requested cost=%dms", System.currentTimeMillis() - start);
         App.post(() -> {

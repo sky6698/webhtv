@@ -29,6 +29,15 @@ public class WebHomeRemoteBridgeWiringTest {
     }
 
     @Test
+    public void remoteSdkFormattingUsesAndroidCompatibleStringApi() throws Exception {
+        String controller = readMain("HomeWebController.java");
+        String sdk = methodBody(controller, "private String getRemoteSdk()", "private void prepareExtensions(");
+
+        assertTrue(sdk.contains("\"\"\".replace(\"%s\", session);"));
+        assertFalse(sdk.contains(".formatted("));
+    }
+
+    @Test
     public void remoteThemePinsRequestsToOneDocumentSession() throws Exception {
         String controller = readMain("HomeWebController.java");
         String registration = methodBody(controller, "private boolean registerRemoteMessageListener(",
@@ -37,7 +46,9 @@ public class WebHomeRemoteBridgeWiringTest {
         assertTrue(registration.contains("int generation"));
         assertFalse(registration.contains("int generation = remoteBridgeGeneration;"));
         assertTrue(controller.contains("String requestNonce"));
-        assertTrue(controller.contains("isRemoteSession(expectedOrigin, generation, requestNonce)"));
+        assertTrue(controller.contains("isRemoteThemeSession(expectedOrigin, generation, requestNonce, themeGeneration)"));
+        assertTrue(registration.contains("ThemeRuntimeSnapshot runtime = getThemeRuntimeSnapshot()"));
+        assertTrue(registration.contains("int themeGeneration = runtime.session().generation()"));
         assertTrue(controller.contains("session:session"));
         assertTrue(controller.contains("window.fongmi.__session===session"));
         assertTrue(controller.contains("data.getBytes(StandardCharsets.UTF_8).length > MAX_REMOTE_MESSAGE_BYTES"));
@@ -45,14 +56,53 @@ public class WebHomeRemoteBridgeWiringTest {
     }
 
     @Test
+    public void remoteThemeGenerationGuardKeepsLegacyAndV2TargetsCompatible() throws Exception {
+        String controller = readMain("HomeWebController.java");
+        String guards = methodBody(controller, "private boolean isRemoteThemeSession(",
+                "private static String limitedRemoteValue(");
+
+        assertTrue(guards.contains("isRemoteBridgeSessionActive(themeGeneration)"));
+        assertTrue(guards.contains("current.isRemoteGlobal()"));
+        assertTrue(guards.contains("!current.isManifest()"));
+        assertFalse(guards.contains("isThemeSessionActive(themeGeneration)"));
+    }
+
+    @Test
     public void remoteThemeInvalidatesRecreatedViewsAndMainFrameHttpFailures() throws Exception {
         String controller = readMain("HomeWebController.java");
-        String recreate = methodBody(controller, "private boolean recreateWebView()", "private void recoverAfterResume()");
+        String replace = methodBody(controller, "private boolean replaceWebView(", "private boolean recreateWebView()");
 
-        assertTrue(ordered(recreate, "invalidateRemoteSession();", "if (parent == null) return false;"));
+        assertTrue(ordered(replace, "themeSession.invalidate();", "invalidateRemoteSession();"));
+        assertTrue(ordered(replace, "invalidateRemoteSession();", "webView.destroy();"));
         assertTrue(controller.contains("public void onReceivedHttpError("));
         assertTrue(controller.contains("handleMainFrameFailure("));
     }
+
+    @Test
+    public void remoteThemeUsesOriginScopedDataProfilesAndFailsClosedWithoutSupport() throws Exception {
+        String controller = readMain("HomeWebController.java");
+        String isolation = readMain("WebThemeDataIsolation.java");
+        String load = methodBody(controller, "private boolean loadResolved(", "public void reload()");
+        String ensure = methodBody(controller, "private boolean ensureDataProfile(",
+                "private boolean replaceWebView(");
+        String replace = methodBody(controller, "private boolean replaceWebView(",
+                "private boolean recreateWebView()");
+
+        assertTrue(ordered(load, "ensureDataProfile(resolved)", "configureBridge(resolved, reload)"));
+        assertTrue(ensure.contains("WebViewFeature.MULTI_PROFILE"));
+        assertTrue(ensure.contains("return false;"));
+        assertTrue(replace.contains("ProfileStore.getInstance().getOrCreateProfile(desired.name())"));
+        assertTrue(ordered(replace, "replacement = new WebView(activity);",
+                "WebViewCompat.setProfile(replacement, desired.name())"));
+        assertTrue(ordered(replace, "WebViewCompat.setProfile(replacement, desired.name())",
+                "replacement.setId(id)"));
+        assertTrue(controller.contains("WebViewCompat.getProfile(webView).getCookieManager()"));
+        assertTrue(controller.contains("cookieManager.setAcceptThirdPartyCookies(webView, !remote)"));
+        assertTrue(controller.contains("Reason.DATA_ISOLATION_UNAVAILABLE"));
+        assertTrue(isolation.contains("MessageDigest.getInstance(\"SHA-256\")"));
+        assertFalse(isolation.contains("getOriginRule() +"));
+    }
+
 
     @Test
     public void themeInfoCapabilitiesComeFromTheSharedRegistry() throws Exception {

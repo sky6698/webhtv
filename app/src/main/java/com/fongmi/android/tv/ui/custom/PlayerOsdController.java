@@ -8,7 +8,6 @@ import android.media.MediaFormat;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
-import android.net.TrafficStats;
 import android.os.Build;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
@@ -26,9 +25,15 @@ import androidx.media3.common.Tracks;
 
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
+import com.fongmi.android.tv.player.DolbyVisionFormatLabel;
+import com.fongmi.android.tv.player.GpuLoadMonitor;
+import com.fongmi.android.tv.player.ijk.IjkDecodePressurePolicy;
 import com.fongmi.android.tv.player.PlayerManager;
+import com.fongmi.android.tv.player.PlaybackPanelResourceMonitor;
+import com.fongmi.android.tv.player.PlaybackDiagnosticsSourcePolicy;
+import com.fongmi.android.tv.player.PlaybackSpeedMeter;
 import com.fongmi.android.tv.player.PlaybackRoute;
-import com.fongmi.android.tv.player.engine.PlayerCacheState;
+import com.fongmi.android.tv.player.engine.PlayerEngine;
 import com.fongmi.android.tv.player.exo.PlaybackAnalyticsListener;
 import com.fongmi.android.tv.setting.PlaybackPerformanceSetting;
 import com.fongmi.android.tv.setting.PlayerSetting;
@@ -49,8 +54,6 @@ public class PlayerOsdController {
         String getTitle();
     }
 
-    private static final DecimalFormat SPEED_FORMAT = new DecimalFormat("#.0");
-    private static final int UID = App.get().getApplicationInfo().uid;
     private static volatile String cachedDeviceText;
     private static volatile String cachedSystemText;
     private static volatile String cachedWebViewText;
@@ -69,19 +72,20 @@ public class PlayerOsdController {
     private final Source source;
     private final View root;
     private final float miniSp;
+    private final PlaybackPanelResourceMonitor resourceMonitor;
 
     private boolean suppressed;
     private final DecimalFormat frameFormat;
     private final DecimalFormat refreshFormat;
     private final DecimalFormat bitrateFormat;
-    private long lastTotalRxBytes;
-    private long lastTimeStamp;
+    private final PlaybackSpeedMeter speedMeter = new PlaybackSpeedMeter();
     private long lastSpeedKBps;
     private String lastSpeedText;
     private boolean controlsVisible;
     private boolean diagnosticsVisible;
     private boolean persistentSuppressed;
     private boolean started;
+    private PlayerManager diagnosticsSamplingPlayer;
 
     public PlayerOsdController(View root, TextView topLeft, TextView topRight, TextView bottomLeft, TextView bottomRight, TextView diagnostics, MiniProgressView miniProgress, Source source, float miniSp) {
         this.timeFormat = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
@@ -100,6 +104,7 @@ public class PlayerOsdController {
         this.source = source;
         this.root = root;
         this.update = this::update;
+        this.resourceMonitor = new PlaybackPanelResourceMonitor(root.getContext());
         diagnosticsExtra.setVisibility(View.GONE);
         updateDiagnosticsWidth();
     }
@@ -123,6 +128,7 @@ public class PlayerOsdController {
 
     public void stop() {
         started = false;
+        stopDiagnosticsSampling();
         App.removeCallbacks(update);
         root.setVisibility(View.GONE);
     }
@@ -167,12 +173,14 @@ public class PlayerOsdController {
         boolean next = visible && PlayerSetting.isOsdDiagnostics();
         if (diagnosticsVisible == next) return;
         diagnosticsVisible = next;
+        if (!next) stopDiagnosticsSampling();
         if (started) render();
     }
 
     public void toggleDiagnostics() {
         if (!PlayerSetting.isOsdDiagnostics()) return;
         diagnosticsVisible = !diagnosticsVisible;
+        if (!diagnosticsVisible) stopDiagnosticsSampling();
         if (started) render();
     }
 
@@ -187,12 +195,13 @@ public class PlayerOsdController {
         }
         setTextSize(miniSp);
         PlayerManager player = source.getPlayer();
-        updateSpeed();
+        updateSpeed(player);
 
         // 控制栏显示时的处理：
         // - leanback: suppressed=false，强制显示 OSD 的标题/分辨率/时间（因为控制栏没有自己的 title/size）
         // - mobile: suppressed=true，已在上面 return，不会执行此分支（mobile 控制栏有自己的 title/size）
         if (controlsVisible) {
+            stopDiagnosticsSampling();
             setTopLeftForControls(player);
             setTopRightForControls();
             bottomLeft.setVisibility(View.GONE);
@@ -208,6 +217,7 @@ public class PlayerOsdController {
         // 控制栏隐藏时，若用户关闭所有 OSD 屏显，停止刷新并隐藏
         boolean enabled = PlayerSetting.isOsdEnabled();
         if (!enabled) {
+            stopDiagnosticsSampling();
             root.setVisibility(View.GONE);
             return false;
         }
@@ -285,9 +295,11 @@ public class PlayerOsdController {
 
     private void setDiagnosticsPanel(PlayerManager player) {
         if (controlsVisible || !PlayerSetting.isOsdDiagnostics() || !diagnosticsVisible || player == null) {
+            stopDiagnosticsSampling();
             diagnosticsPanel.setVisibility(View.GONE);
             return;
         }
+        startDiagnosticsSampling(player);
         DiagnosticsText text = getDiagnostics(player);
         boolean land = isLandscape();
         updateDiagnosticsWidth();
@@ -372,59 +384,85 @@ public class PlayerOsdController {
         miniProgress.setVisibility(View.GONE);
     }
 
-    private void updateSpeed() {
-        long total = TrafficStats.getUidRxBytes(UID);
-        if (total == TrafficStats.UNSUPPORTED) {
-            lastSpeedKBps = 0;
-            lastSpeedText = "";
+    private void updateSpeed(PlayerManager player) {
+        // No player means no playback to report on; app-wide traffic would mislead here.
+        if (player == null) {
+            resetSpeed();
             return;
         }
-        long now = System.currentTimeMillis();
-        long rxKb = total / 1024;
-        long speed = (rxKb - lastTotalRxBytes) * 1000 / Math.max(now - lastTimeStamp, 1);
-        lastTimeStamp = now;
-        lastTotalRxBytes = rxKb;
-        lastSpeedKBps = Math.max(0, speed);
-        lastSpeedText = formatSpeed(lastSpeedKBps);
+        speedMeter.sample(player);
+        lastSpeedKBps = speedMeter.getBytesPerSecond() / 1024;
+        lastSpeedText = speedMeter.getText();
     }
 
     private DiagnosticsText getDiagnostics(PlayerManager player) {
+        GpuLoadMonitor.process().requestSample();
+        resourceMonitor.requestSample();
         PlaybackAnalyticsListener.Snapshot snapshot = player.isExo() ? PlaybackAnalyticsListener.getSnapshot() : PlaybackAnalyticsListener.Snapshot.empty();
         Format video = snapshot.videoFormat() != null ? snapshot.videoFormat() : snapshot.errorFormat() != null ? snapshot.errorFormat() : player.getVideoFormat();
         Format audio = snapshot.audioFormat();
         String state = stateText(player.getPlaybackState()) + (player.isLoading() ? " / 正在加载" : "");
         String buffer = join(" / ", formatDuration(player.getBufferedDuration()), player.getBufferedPercentage() > 0 ? player.getBufferedPercentage() + "%" : "");
         String rebuffer = snapshot.rebufferCount() <= 0 ? "0 次" : snapshot.rebufferCount() + " 次 / " + formatDuration(snapshot.rebufferTotalMs());
-        String network = join(" / ", "当前 " + emptyDash(lastSpeedText), "估算带宽 " + emptyDash(getBandwidthEstimateText(snapshot)), snapshot.lastLoadBytes() > 0 ? "最近加载 " + formatBytes(snapshot.lastLoadBytes()) + " / " + snapshot.lastLoadTimeMs() + " ms" : "");
-        String nativeCache = summarizeNativeCache(player.getCacheState());
-        String renderDiagnostics = player.getRenderDiagnostics();
-        String runtimeDiagnostics = player.getRuntimeDiagnostics();
-        String videoText = summarizeVideo(video, player, snapshot.videoDecoderName(), getVideoTrackState(player));
+        long stableThroughput = player.getNetworkProtectionStableThroughput();
+        long consumption = player.getNetworkProtectionConsumption();
+        String networkProtection = player.getNetworkProtectionText();
+        String strategy = join(" / ",
+                TextUtils.isEmpty(networkProtection) ? "" : networkProtection,
+                "可支撑 " + new DecimalFormat("0.00x").format(player.getNetworkProtectionSupportedSpeed()),
+                "当前 " + new DecimalFormat("0.00x").format(player.getEffectiveSpeed()));
+        boolean localSource = PlaybackDiagnosticsSourcePolicy.isLocal(player.getUrl());
+        String currentNetworkSpeed = !TextUtils.isEmpty(lastSpeedText)
+                ? lastSpeedText : getBandwidthEstimateText(snapshot);
+        String network = localSource ? "本地文件 / 不检测网速" : player.isExo() ? join(" / ",
+                !TextUtils.isEmpty(currentNetworkSpeed) ? "当前 " + currentNetworkSpeed : "",
+                consumption > 0 ? "消费需求 " + formatBitrate(consumption) : "",
+                stableThroughput > 0 ? "稳定吞吐 " + formatBitrate(stableThroughput) : "",
+                stableThroughput > 0 && consumption > 0 ? "网络余量 " + formatSignedBitrate(stableThroughput - consumption) : "")
+                : join(" / ", "当前 " + emptyDash(lastSpeedText));
+        if (TextUtils.isEmpty(network)) network = "待采样";
+        String renderDiagnostics = player.isMpv() ? player.getRenderDiagnostics() : "";
+        String runtimeDiagnostics = player.isMpv() ? player.getRuntimeDiagnostics() : "";
+        String gpu = join(" / ", getSystemGpuText(),
+                player.getGpuLoadDiagnostics());
+        PlaybackPanelResourceMonitor.Snapshot resources = resourceMonitor.snapshot();
+        String cpu = getCpuText(resources);
+        String memory = getMemoryText(resources);
+        String frameTiming = player.isExo() ? summarizeFrameTiming() : "";
+        PlayerEngine.VideoPlaybackDetails videoDetails =
+                player.getVideoPlaybackDetails();
+        String videoText = summarizeVideo(video, player,
+                snapshot.videoDecoderName(), getVideoTrackState(player),
+                videoDetails);
         AudioTrackState audioTrack = getAudioTrackState(player);
         String audioText = summarizeAudio(audio, audioTrack, snapshot.audioDecoderName());
         String render = PlayerSetting.getRender() == PlayerSetting.RENDER_SURFACE ? "Surface" : "Texture";
         String tunnel = switchText(PlayerSetting.isTunnelingEnabled());
-        String performance = PlaybackPerformanceSetting.getProfileName();
+        String performance = PlaybackPerformanceSetting.getProfileName(player.getPlayerType());
         String passThrough = player.getAudioPassThroughText();
-        String preload = "预载" + switchText(PreloadSetting.isPreload());
+        String preload = "预载" + switchText(PreloadSetting.isPreload(player.getPlayerType()));
         String frameRateMatch = player.isExo() ? "帧率匹配 开" : "";
         String softTune = getSoftDecodeTuneText(player);
         String playerText = join(" / ", player.getPlayerText(), player.getDecodeText(), render, "隧道" + tunnel, "性能" + performance, frameRateMatch, preload, "直通" + passThrough, softTune, player.isExo() ? "兜底开" : "");
         String playback = join(" / ", state, buffer, "重缓冲 " + rebuffer, "掉帧 " + player.getDroppedFrames());
+        String startup = getStartupText(player);
         String error = getErrorText(player, snapshot);
         String main = join("\n",
-                row("结论", getDiagnosis(player, snapshot, video, audioTrack)),
                 TextUtils.isEmpty(error) ? "" : row("错误", error),
                 row("视频", videoText),
-                row("设备HEVC能力", getHevcDecoderText()),
                 row("音频", audioText),
                 row("网络", network),
-                TextUtils.isEmpty(nativeCache) ? "" : row("MPV缓存", nativeCache),
+                player.isExo() && !localSource ? row("动态网络保护", strategy) : "",
                 TextUtils.isEmpty(renderDiagnostics) ? "" : row("MPV渲染", renderDiagnostics),
                 TextUtils.isEmpty(runtimeDiagnostics) ? "" : row("MPV运行", runtimeDiagnostics),
-                row("状态", playback),
-                row("播放", playerText),
-                row("来源", summarizeSource(player.getUrl())));
+                TextUtils.isEmpty(gpu) ? "" : row("GPU", gpu),
+                TextUtils.isEmpty(cpu) ? "" : row("CPU", cpu),
+                TextUtils.isEmpty(memory) ? "" : row("内存", memory),
+                TextUtils.isEmpty(frameTiming) ? "" : row("帧调度", frameTiming),
+                row("播放", playback),
+                row("配置", playerText),
+                TextUtils.isEmpty(startup) ? "" : row("起播", startup),
+                row("结论", getDiagnosis(player, snapshot, video, audioTrack, localSource)));
         String extra = join("\n",
                 row("设备", getDeviceText()),
                 row("系统", getSystemText()),
@@ -435,20 +473,109 @@ public class PlayerOsdController {
         return new DiagnosticsText(main, extra);
     }
 
-    private String getDiagnosis(PlayerManager player, PlaybackAnalyticsListener.Snapshot snapshot, Format video, AudioTrackState audioTrack) {
+    /**
+     * Startup timeline plus the stage that consumed the most time, so a slow start can
+     * be attributed on-device instead of requiring a debug log export.
+     */
+    private String getStartupText(PlayerManager player) {
+        String summary = player.getStartupSummary();
+        if (TextUtils.isEmpty(summary)) return "";
+        String slowest = player.getSlowestStartupStage();
+        return TextUtils.isEmpty(slowest) ? summary : summary + "  最慢 " + slowest;
+    }
+
+    private String getDiagnosis(PlayerManager player, PlaybackAnalyticsListener.Snapshot snapshot, Format video, AudioTrackState audioTrack, boolean localSource) {
         if (isDecodeError(snapshot) && player.isHardDecode()) return "硬件解码失败：设备可能不支持该视频编码、分辨率、帧率或规格";
         if (!TextUtils.isEmpty(snapshot.errorCode())) return "播放器报错，先看错误行";
         if (audioTrack.hasTracks() && audioTrack.isUnsupported()) return "音频轨不支持：" + summarizeAudioFormat(audioTrack.format()) + " / " + supportText(audioTrack.support());
         if (player.isExo() && audioTrack.hasTracks() && !audioTrack.selected() && snapshot.audioFormat() == null && player.getPlaybackState() == androidx.media3.common.Player.STATE_READY) return "已发现音轨但未选中，可能无声";
         if (player.isExo() && audioTrack.hasTracks() && TextUtils.isEmpty(snapshot.audioDecoderName()) && player.getPlaybackState() == androidx.media3.common.Player.STATE_READY) return "已发现音轨但 decoder 未初始化，可能无声";
-        long mediaBitrate = getMediaBitrate(video, snapshot.audioFormat() != null ? snapshot.audioFormat() : audioTrack.format());
-        long availableBitrate = snapshot.bandwidthEstimate() > 0 ? snapshot.bandwidthEstimate() : lastSpeedKBps * 1024 * 8;
-        if (availableBitrate > 0 && mediaBitrate > 0 && availableBitrate < mediaBitrate * 13 / 10) return "网速可能低于资源码率";
-        if (player.isLoading() && player.getBufferedDuration() < 3000) return "缓冲偏少，可能是网络或源响应慢";
+        if (!localSource) {
+            long mediaBitrate = getMediaBitrate(video, snapshot.audioFormat() != null ? snapshot.audioFormat() : audioTrack.format());
+            long availableBitrate = snapshot.bandwidthEstimate() > 0 ? snapshot.bandwidthEstimate() : lastSpeedKBps * 1024 * 8;
+            if (availableBitrate > 0 && mediaBitrate > 0 && availableBitrate < mediaBitrate * 13 / 10) return "网速可能低于资源码率";
+            // Must use the raw buffered duration: getBufferedDuration() folds in completed
+            // disk ranges, which reads high enough that this hint could never fire.
+            if (player.isLoading() && player.getNativeBufferedDuration() < 3000) return "缓冲偏少，可能是网络或源响应慢";
+        }
         if (player.getDroppedFrames() >= 60) return "掉帧较多，可能是解码或渲染压力";
-        if (formatBitrateValue(video) >= 30_000_000) return "资源码率较高，对网络和解码要求高";
+        if (!localSource && formatBitrateValue(video) >= 30_000_000) return "资源码率较高，对网络和解码要求高";
         if (player.isExo() && audioTrack.hasTracks() && snapshot.audioFormat() == null) return "正在等待音频轨信息";
         return "正常";
+    }
+
+    private String getSystemGpuText() {
+        GpuLoadMonitor.Snapshot system = GpuLoadMonitor.process().snapshot();
+        if (!system.available()) return "";
+        return join(" / ",
+                String.format(Locale.US, "当前 %.0f%%", system.percent()),
+                String.format(Locale.US, "峰值 %.0f%%", system.peakPercent()),
+                formatGpuFrequency(system.frequencyHz()));
+    }
+
+    private String getCpuText(PlaybackPanelResourceMonitor.Snapshot snapshot) {
+        if (snapshot == null || !snapshot.cpuAvailable()) return "";
+        return String.format(Locale.US,
+                "App 当前 %.0f%% / 10秒 %.0f%% / 峰值 %.0f%%",
+                snapshot.cpuPercent(), snapshot.cpuAveragePercent(),
+                snapshot.cpuPeakPercent());
+    }
+
+    private String getMemoryText(PlaybackPanelResourceMonitor.Snapshot snapshot) {
+        if (snapshot == null || !snapshot.memoryAvailable()) return "";
+        String javaHeap = snapshot.javaHeapUsedBytes() < 0 ? ""
+                : "Java " + formatMemoryBytes(snapshot.javaHeapUsedBytes())
+                + (snapshot.javaHeapLimitBytes() >= 0
+                ? "/" + formatMemoryBytes(snapshot.javaHeapLimitBytes()) : "");
+        String system = snapshot.systemAvailableBytes() < 0 ? ""
+                : "系统可用 " + formatMemoryBytes(snapshot.systemAvailableBytes())
+                + (snapshot.systemTotalBytes() >= 0
+                ? "/" + formatMemoryBytes(snapshot.systemTotalBytes()) : "");
+        return join(" / ",
+                snapshot.pssBytes() >= 0
+                        ? "PSS " + formatMemoryBytes(snapshot.pssBytes()) : "",
+                snapshot.graphicsPssBytes() > 0
+                        ? "图形 " + formatMemoryBytes(snapshot.graphicsPssBytes()) : "",
+                javaHeap,
+                snapshot.nativeHeapBytes() >= 0
+                        ? "Native " + formatMemoryBytes(snapshot.nativeHeapBytes()) : "",
+                system);
+    }
+
+    private String formatGpuFrequency(long frequencyHz) {
+        if (frequencyHz <= 0) return "";
+        if (frequencyHz >= 1_000_000_000L) {
+            return String.format(Locale.US, "%.2fGHz", frequencyHz / 1_000_000_000.0);
+        }
+        return String.format(Locale.US, "%.0fMHz", frequencyHz / 1_000_000.0);
+    }
+
+    private String formatMemoryBytes(long bytes) {
+        if (bytes < 0) return "";
+        double mib = bytes / (1024.0 * 1024.0);
+        if (mib >= 1024) return String.format(Locale.US, "%.1fGB", mib / 1024.0);
+        if (mib >= 100) return String.format(Locale.US, "%.0fMB", mib);
+        return String.format(Locale.US, "%.1fMB", mib);
+    }
+
+    private void startDiagnosticsSampling(PlayerManager player) {
+        if (diagnosticsSamplingPlayer != null
+                && diagnosticsSamplingPlayer != player) {
+            diagnosticsSamplingPlayer.setGpuLoadDiagnosticsEnabled(false);
+        }
+        diagnosticsSamplingPlayer = player;
+        player.setGpuLoadDiagnosticsEnabled(true);
+        if (!resourceMonitor.isActive()) resourceMonitor.start();
+        GpuLoadMonitor.process().start();
+    }
+
+    private void stopDiagnosticsSampling() {
+        if (diagnosticsSamplingPlayer != null) {
+            diagnosticsSamplingPlayer.setGpuLoadDiagnosticsEnabled(false);
+            diagnosticsSamplingPlayer = null;
+        }
+        resourceMonitor.stop();
+        GpuLoadMonitor.process().stop();
     }
 
     private String getErrorText(PlayerManager player, PlaybackAnalyticsListener.Snapshot snapshot) {
@@ -468,10 +595,21 @@ public class PlayerOsdController {
     }
 
     private String getSoftDecodeTuneText(PlayerManager player) {
-        if (player.isHardDecode()) return "";
-        if (player.isIjk()) return "软解降负载 IJK跳帧/滤波";
+        // The hard-decode profile still falls back to the FFmpeg renderer for codecs
+        // MediaCodec refuses, and that fallback now gets load shedding too. Hiding the status
+        // whenever the profile says hardware would conceal it in exactly the case where the
+        // user needs to confirm it is active.
+        if (player.isHardDecode() && !player.isHardProfileRunningSoftware()) return "";
+        if (player.isIjk()) {
+            // Report what IJK actually applied. It forces TuneMode.OFF in the hard-decode
+            // profile even with a mode configured, so claiming shedding is active whenever
+            // this row is reachable would be false exactly in the fallback case.
+            IjkDecodePressurePolicy.TuneMode mode = player.getAppliedIjkTuneMode();
+            if (mode == null || mode == IjkDecodePressurePolicy.TuneMode.OFF) return "软解降负载 关";
+            return "软解降负载 IJK跳帧/滤波 " + mode.label();
+        }
         if (player.isMpv()) return "软解降负载 MPV hwdec=no";
-        return PlaybackPerformanceSetting.isSoftVideoTuneEnabled() ? "软解降负载 EXO跳帧/滤波/低分辨" : "软解降负载 关";
+        return PlaybackPerformanceSetting.isSoftVideoTuneEnabled() ? "软解降负载 EXO滤波/低分辨" : "软解降负载 关";
     }
 
     private boolean isDecodeError(PlaybackAnalyticsListener.Snapshot snapshot) {
@@ -479,17 +617,29 @@ public class PlayerOsdController {
         return "ERROR_CODE_DECODER_INIT_FAILED".equals(code) || "ERROR_CODE_DECODER_QUERY_FAILED".equals(code) || "ERROR_CODE_DECODING_FAILED".equals(code);
     }
 
-    private String summarizeVideo(Format format, PlayerManager player, String decoder, VideoTrackState videoTrack) {
+    private String summarizeVideo(Format format, PlayerManager player,
+                                  String decoder,
+                                  VideoTrackState videoTrack,
+                                  PlayerEngine.VideoPlaybackDetails details) {
         if (videoTrack.hasTracks()) format = mergeFormat(format, videoTrack.format());
         String size = getSize(format, player);
-        String fps = getFrameRate(format);
-        String bitrate = getBitrate(format);
-        String codec = format == null || TextUtils.isEmpty(format.codecs) ? "codec -" : "codec " + format.codecs;
+        String fps = getFrameRate(format, player);
+        String bitrate = getBitrate(format, player);
+        boolean dolbyVision = details != null
+                && details.hasDolbyVisionSource();
+        String formatName = dolbyVision
+                ? DolbyVisionFormatLabel.formatName(details)
+                : getVideoCodecName(format);
+        String codecValue = dolbyVision
+                ? DolbyVisionFormatLabel.codecText(details)
+                : format == null ? "" : format.codecs;
+        String codec = TextUtils.isEmpty(codecValue)
+                ? "codec -" : "codec " + codecValue;
         String color = getColor(format).replace("color ", "色彩 ");
         String support = videoTrack.hasTracks() && !videoTrack.isHandled() ? supportText(videoTrack.support()) : "";
         String decode = "decoder " + emptyDash(decoderText(player, decoder));
         return join(" / ",
-                "格式 " + emptyDash(getMime(format)),
+                "格式 " + emptyDash(formatName),
                 "分辨率 " + emptyDash(size),
                 "帧率 " + emptyDash(fps),
                 "码率 " + emptyDash(bitrate),
@@ -526,7 +676,11 @@ public class PlayerOsdController {
     private String decoderText(PlayerManager player, String decoder) {
         if (!TextUtils.isEmpty(decoder)) return decoder;
         if (player == null) return "";
-        if (player.isMpv()) return player.isHardDecode() ? "MPV mediacodec" : "MPV ffmpeg";
+        if (player.isMpv()) {
+            String hwdec = player.getVideoPlaybackDetails().hwdecCurrent();
+            if (!TextUtils.isEmpty(hwdec)) return "MPV " + hwdec;
+            return player.isHardDecode() ? "MPV mediacodec" : "MPV ffmpeg";
+        }
         if (player.isIjk()) return player.isHardDecode() ? "IJK mediacodec" : "IJK ffmpeg";
         return "";
     }
@@ -627,8 +781,22 @@ public class PlayerOsdController {
         return frameFormat.format(format.frameRate) + "fps";
     }
 
+    private String getFrameRate(Format format, PlayerManager player) {
+        String declared = getFrameRate(format);
+        if (!TextUtils.isEmpty(declared) || player == null || !player.isExo()) return declared;
+        PlaybackAnalyticsListener.DisplayFrameRateEstimate estimate = PlaybackAnalyticsListener.getDisplayFrameRateEstimate();
+        return estimate.frameRate() <= 0 ? "" : frameFormat.format(estimate.frameRate()) + "fps";
+    }
+
     private String getBitrate(Format format) {
         return format == null ? "" : formatBitrate(formatBitrateValue(format));
+    }
+
+    private String getBitrate(Format format, PlayerManager player) {
+        String declared = getBitrate(format);
+        if (!TextUtils.isEmpty(declared) || player == null || !player.isExo()) return declared;
+        PlaybackAnalyticsListener.DisplayMediaBitrateEstimate estimate = PlaybackAnalyticsListener.getDisplayMediaBitrateEstimate(format);
+        return estimate.bitrateBitsPerSecond() <= 0 ? "" : formatBitrate(estimate.bitrateBitsPerSecond());
     }
 
     private String getBandwidthEstimateText(PlaybackAnalyticsListener.Snapshot snapshot) {
@@ -637,25 +805,28 @@ public class PlayerOsdController {
         return realtimeEstimate > 0 ? formatBitrate(realtimeEstimate) : "";
     }
 
-    private String summarizeNativeCache(PlayerCacheState cache) {
-        if (cache == null || !cache.available()) return "";
-        String runtime = join(" / ",
-                cache.cacheDurationMs() > 0 ? "时长 " + formatDuration(cache.cacheDurationMs()) : "",
-                cache.forwardBytes() > 0 ? "前向 " + formatBytes(cache.forwardBytes()) : "",
-                cache.totalBytes() > 0 ? "总 " + formatBytes(cache.totalBytes()) : "",
-                cache.fileBytes() > 0 ? "临时 " + formatBytes(cache.fileBytes()) : "",
-                cache.rawInputBytesPerSecond() > 0 ? "读速 " + formatByteSpeed(cache.rawInputBytesPerSecond()) : "",
-                cache.bufferingState() > 0 && cache.bufferingState() < 100 ? "填充 " + cache.bufferingState() + "%" : "",
-                cache.idle() ? "idle" : "",
-                cache.underrun() ? "underrun" : "",
-                cache.bofCached() && cache.eofCached() ? "全量缓存" : cache.eofCached() ? "EOF" : "");
-        String config = join(" / ",
-                "cache " + switchText(cache.enabled()),
-                "目标 " + cache.cacheSeconds() + "s",
-                "readahead " + cache.readaheadSeconds() + "s",
-                cache.maxBytes() > 0 ? "上限 " + formatBytes(cache.maxBytes()) : "",
-                cache.maxBackBytes() > 0 ? "回退 " + formatBytes(cache.maxBackBytes()) : "回退 关");
-        return join(" / ", runtime, config);
+    private String formatSignedBitrate(long bitsPerSecond) {
+        return (bitsPerSecond >= 0 ? "+" : "-") + formatBitrate(Math.abs(bitsPerSecond));
+    }
+
+    private String summarizeFrameTiming() {
+        com.fongmi.android.tv.player.exo.ExoFrameTimingMetrics.Snapshot timing = PlaybackAnalyticsListener.getFrameTimingSnapshot();
+        com.fongmi.android.tv.player.exo.ExoFrameSchedulingExperimentMetrics.Snapshot experiment = PlaybackAnalyticsListener.getFrameSchedulingExperimentSnapshot();
+        String unit = experiment.experimentApplied()
+                ? "帧调度A/B " + experiment.earlySchedulingThresholdUs() / 1000
+                + "ms / 耗时推进"
+                + (experiment.durationToProgressRequested() ? "开" : "关")
+                : "";
+        if (timing.frameCount() <= 0 && timing.releaseFrameCount() <= 0 && timing.codecErrorCount() <= 0) return unit;
+        if (timing.codecErrorCount() > 0) return join(" / ", unit, "解码错误 " + timing.codecErrorCount());
+        if (timing.lateReleaseFrameCount() > 0) {
+            return join(" / ", unit, "释放滞后 " + timing.lateReleaseFrameCount() + " 帧 / 最大延迟 " + bitrateFormat.format(timing.maxLateReleaseUs() / 1000f) + "ms");
+        }
+        if (timing.lateBatchCount() > 0) return join(" / ", unit, "调度滞后 " + timing.lateBatchCount() + " 批");
+        if (timing.releaseJitterSampleCount() > 0 && timing.averageReleaseJitterUs() >= 5_000) {
+            return join(" / ", unit, "释放抖动 " + bitrateFormat.format(timing.averageReleaseJitterUs() / 1000f) + "ms");
+        }
+        return unit;
     }
 
     private String getColor(Format format) {
@@ -663,7 +834,18 @@ public class PlayerOsdController {
         String color = format.colorInfo.toLogString();
         if (TextUtils.isEmpty(color)) return "";
         color = color.replace("Limited range", "Limited").replace("Full range", "Full").replace("SMPTE 170M", "SMPTE170M");
-        return "color " + color;
+        return "color " + join(" ", outputHdrName(format), color);
+    }
+
+    private String outputHdrName(Format format) {
+        if (format == null || format.colorInfo == null) return "";
+        if (format.colorInfo.colorTransfer == C.COLOR_TRANSFER_ST2084) return "HDR10";
+        if (format.colorInfo.colorTransfer == C.COLOR_TRANSFER_HLG) return "HLG";
+        if (androidx.media3.common.ColorInfo.isTransferHdr(format.colorInfo)) return "HDR";
+        if (format.colorInfo.colorTransfer == C.COLOR_TRANSFER_SDR
+                || format.colorInfo.colorTransfer == C.COLOR_TRANSFER_SRGB
+                || format.colorInfo.colorTransfer == C.COLOR_TRANSFER_LINEAR) return "SDR";
+        return "";
     }
 
     private long getMediaBitrate(Format video, Format audio) {
@@ -688,6 +870,21 @@ public class PlayerOsdController {
             return index >= 0 && index + 1 < format.sampleMimeType.length() ? format.sampleMimeType.substring(index + 1) : format.sampleMimeType;
         }
         return TextUtils.isEmpty(format.codecs) ? "" : format.codecs;
+    }
+
+    private String getVideoCodecName(Format format) {
+        if (format == null) return "";
+        String mime = TextUtils.isEmpty(format.sampleMimeType) ? "" : format.sampleMimeType.toLowerCase(Locale.ROOT);
+        String codecs = TextUtils.isEmpty(format.codecs) ? "" : format.codecs.toLowerCase(Locale.ROOT);
+        if ("video/dolby-vision".equals(mime) || codecs.startsWith("dvhe") || codecs.startsWith("dvh1")) return "Dolby Vision";
+        if (MimeTypes.VIDEO_H265.equals(mime) || codecs.startsWith("hvc1") || codecs.startsWith("hev1")) return "H.265 / HEVC";
+        if (MimeTypes.VIDEO_H264.equals(mime) || codecs.startsWith("avc1") || codecs.startsWith("avc3")) return "H.264 / AVC";
+        if (MimeTypes.VIDEO_AV1.equals(mime) || codecs.startsWith("av01")) return "AV1";
+        if (MimeTypes.VIDEO_VP9.equals(mime) || codecs.startsWith("vp09")) return "VP9";
+        if (MimeTypes.VIDEO_VP8.equals(mime) || codecs.startsWith("vp08")) return "VP8";
+        if (MimeTypes.VIDEO_MPEG2.equals(mime)) return "MPEG-2";
+        if (MimeTypes.VIDEO_MP4V.equals(mime)) return "MPEG-4";
+        return getMime(format);
     }
 
     private String getAudioMime(Format format) {
@@ -729,14 +926,6 @@ public class PlayerOsdController {
         float kb = bytes / 1024f;
         if (kb < 1024) return Math.round(kb) + "KB";
         return bitrateFormat.format(kb / 1024f) + "MB";
-    }
-
-    private String formatSpeed(long kbps) {
-        return kbps < 1000 ? kbps + " KB/s" : SPEED_FORMAT.format(kbps / 1024f) + " MB/s";
-    }
-
-    private String formatByteSpeed(long bytesPerSecond) {
-        return formatSpeed(Math.max(0, bytesPerSecond / 1024));
     }
 
     private String formatDuration(long ms) {
@@ -1008,9 +1197,7 @@ public class PlayerOsdController {
     }
 
     private void resetSpeed() {
-        long total = TrafficStats.getUidRxBytes(UID);
-        lastTotalRxBytes = total == TrafficStats.UNSUPPORTED ? 0 : total / 1024;
-        lastTimeStamp = System.currentTimeMillis();
+        speedMeter.reset();
         lastSpeedKBps = 0;
         lastSpeedText = "";
     }

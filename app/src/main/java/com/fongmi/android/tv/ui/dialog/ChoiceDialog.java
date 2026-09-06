@@ -3,6 +3,7 @@ package com.fongmi.android.tv.ui.dialog;
 import android.app.Dialog;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -27,12 +28,16 @@ import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
 
 import com.fongmi.android.tv.R;
+import com.fongmi.android.tv.ui.helper.TmdbSeasonResolver;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.Util;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textview.MaterialTextView;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 
 public final class ChoiceDialog extends DialogFragment {
 
@@ -45,6 +50,7 @@ public final class ChoiceDialog extends DialogFragment {
     private boolean[] checked;
     private int selected = -1;
     private boolean multi;
+    private boolean showCancel = true;
     private boolean dismissOnChoice = true;
     private OnChoice choice;
     private OnApply apply;
@@ -68,6 +74,64 @@ public final class ChoiceDialog extends DialogFragment {
         CharSequence onNeutral();
     }
 
+    public interface OnTmdbSeasonChoice {
+        void onAuto();
+
+        void onTmdbCounts();
+
+        void onFlat();
+
+        default void onAi() {
+        }
+
+        void onSeason(int seasonNumber);
+    }
+
+    public static void showTmdbSeason(
+            FragmentActivity activity,
+            List<Integer> seasonNumbers,
+            Map<Integer, Integer> episodeCounts,
+            TmdbSeasonResolver.Resolution resolution,
+            OnTmdbSeasonChoice listener) {
+        if (activity == null || listener == null) return;
+        List<Integer> seasons = new ArrayList<>();
+        if (seasonNumbers != null) {
+            for (Integer season : seasonNumbers) {
+                if (season != null && season >= 0 && !seasons.contains(season)) seasons.add(season);
+            }
+        }
+        CharSequence[] items = new CharSequence[seasons.size() + 4];
+        items[0] = activity.getString(R.string.tmdb_season_auto);
+        items[1] = activity.getString(R.string.tmdb_season_auto_by_counts);
+        items[2] = activity.getString(R.string.tmdb_season_keep_original);
+        items[3] = activity.getString(R.string.tmdb_season_ai_analyze);
+        for (int index = 0; index < seasons.size(); index++) {
+            int season = seasons.get(index);
+            int count = episodeCounts == null ? 0 : Math.max(0, episodeCounts.getOrDefault(season, 0));
+            items[index + 4] = season == 0
+                    ? activity.getString(R.string.tmdb_season_special, count)
+                    : activity.getString(R.string.tmdb_season_option, season, count);
+        }
+        int selected = selectedTmdbSeasonIndex(seasons, resolution);
+        showSingle(activity.getSupportFragmentManager(), activity.getString(R.string.tmdb_season_match_title), items, selected, which -> {
+            if (which == 0) listener.onAuto();
+            else if (which == 1) listener.onTmdbCounts();
+            else if (which == 2) listener.onFlat();
+            else if (which == 3) listener.onAi();
+            else if (which - 4 < seasons.size()) listener.onSeason(seasons.get(which - 4));
+        });
+    }
+
+    private static int selectedTmdbSeasonIndex(List<Integer> seasons, TmdbSeasonResolver.Resolution resolution) {
+        if (resolution == null) return 0;
+        if (resolution.getSource() == TmdbSeasonResolver.Source.MANUAL_MULTI_SLICE) return 1;
+        if (resolution.getSource() == TmdbSeasonResolver.Source.MANUAL_FLAT) return 2;
+        if (resolution.getSource() != TmdbSeasonResolver.Source.MANUAL || resolution.getSelectedSeason() == null) return 0;
+        int index = seasons.indexOf(resolution.getSelectedSeason());
+        return index < 0 ? 0 : index + 4;
+    }
+
+
     public static void showSingle(Fragment fragment, int titleRes, CharSequence[] items, int selected, OnChoice choice) {
         showSingle(fragment.getChildFragmentManager(), fragment.getString(titleRes), items, selected, choice);
     }
@@ -76,11 +140,24 @@ public final class ChoiceDialog extends DialogFragment {
         showSingle(activity.getSupportFragmentManager(), activity.getString(titleRes), items, selected, choice);
     }
 
+    public static void showSingleNoCancel(Fragment fragment, int titleRes, CharSequence[] items, int selected, OnChoice choice) {
+        showSingle(fragment.getChildFragmentManager(), fragment.getString(titleRes), items, selected, false, choice);
+    }
+
+    public static void showSingleNoCancel(FragmentActivity activity, int titleRes, CharSequence[] items, int selected, OnChoice choice) {
+        showSingle(activity.getSupportFragmentManager(), activity.getString(titleRes), items, selected, false, choice);
+    }
+
     public static void showSingle(FragmentManager manager, CharSequence title, CharSequence[] items, int selected, OnChoice choice) {
+        showSingle(manager, title, items, selected, true, choice);
+    }
+
+    private static void showSingle(FragmentManager manager, CharSequence title, CharSequence[] items, int selected, boolean showCancel, OnChoice choice) {
         ChoiceDialog dialog = new ChoiceDialog();
         dialog.title = title;
         dialog.items = items == null ? new CharSequence[0] : Arrays.copyOf(items, items.length);
         dialog.selected = selected;
+        dialog.showCancel = showCancel;
         dialog.choice = choice;
         dialog.show(manager, ChoiceDialog.class.getSimpleName());
     }
@@ -181,9 +258,9 @@ public final class ChoiceDialog extends DialogFragment {
         window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         window.setAttributes(params);
         window.setLayout(params.width, params.height);
-        if (Util.isLeanback()) window.getDecorView().post(() -> {
+        window.getDecorView().post(() -> {
             adaptListHeight(window);
-            window.getDecorView().post(this::focusSelectedItem);
+            if (Util.isLeanback()) window.getDecorView().post(this::focusSelectedItem);
         });
     }
 
@@ -204,20 +281,46 @@ public final class ChoiceDialog extends DialogFragment {
     private void adaptListHeight(Window window) {
         View root = viewRoot();
         View listView = root == null ? null : root.findViewWithTag("choice_list");
-        if (!(listView instanceof ViewGroup list) || !(list.getParent() instanceof ScrollView scroll)) return;
-        int height = adaptiveListHeight(window.getDecorView().getHeight(), scroll.getHeight());
+        if (!(listView instanceof ViewGroup list) || !(list.getParent() instanceof ScrollView scroll) || !(scroll.getParent() instanceof ViewGroup rootGroup)) return;
+        int chrome = dialogChromeHeight(rootGroup, scroll);
+        int windowHeight = availableWindowHeight(window);
+        if (windowHeight <= 0) return;
+        int height = adaptiveListHeight(windowHeight, chrome);
         ViewGroup.LayoutParams params = scroll.getLayoutParams();
         if (params.height == height) return;
         params.height = height;
         scroll.setLayoutParams(params);
         window.setLayout(window.getAttributes().width, WindowManager.LayoutParams.WRAP_CONTENT);
+        scroll.post(() -> adaptListHeight(window));
     }
 
-    private int adaptiveListHeight(int dialogHeight, int currentListHeight) {
+    private int availableWindowHeight(Window window) {
+        Rect frame = new Rect();
+        window.getDecorView().getWindowVisibleDisplayFrame(frame);
+        return frame.height();
+    }
+
+    private int dialogChromeHeight(ViewGroup root, View target) {
+        return calculateDialogChromeHeight(root.getMeasuredHeight(), target.getMeasuredHeight());
+    }
+
+    static int calculateDialogChromeHeight(int rootHeight, int targetHeight) {
+        return Math.max(0, rootHeight - targetHeight);
+    }
+
+    private int adaptiveListHeight(int screenHeight, int chromeHeight) {
         int desired = Math.max(dp(56), items.length * dp(54));
-        int chrome = Math.max(0, dialogHeight - currentListHeight);
-        int available = ResUtil.getScreenHeight(requireContext()) - dp(32) - chrome;
-        return Math.min(desired, Math.max(dp(56), available));
+        return calculateAdaptiveListHeight(desired, dp(56), screenHeight, chromeHeight, dp(32));
+    }
+
+    static int calculateAdaptiveListHeight(int desiredHeight, int minHeight, int screenHeight, int chromeHeight, int safeMargin) {
+        int desired = Math.max(0, Math.max(minHeight, desiredHeight));
+        int viewport = Math.max(0, screenHeight);
+        int chrome = Math.max(0, chromeHeight);
+        int margin = Math.max(0, safeMargin);
+        if ((long) chrome + desired + margin <= viewport) return desired;
+        int available = Math.max(0, viewport - chrome - margin);
+        return Math.min(desired, available);
     }
 
     private boolean focusAdjacentItem(int position, int direction) {
@@ -242,7 +345,7 @@ public final class ChoiceDialog extends DialogFragment {
     }
 
     private View createView(LayoutInflater inflater) {
-        if (!multi && items != null && items.length > 0 && negative == null) negative = getString(R.string.dialog_negative);
+        if (showCancel && !multi && items != null && items.length > 0 && negative == null) negative = getString(R.string.dialog_negative);
         LinearLayout root = new LinearLayout(requireContext());
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundResource(R.drawable.shape_shell_proxy_dialog);
@@ -346,9 +449,9 @@ public final class ChoiceDialog extends DialogFragment {
         }
         boolean on = itemSelected(position);
         boolean focused = button.isFocused();
-        int text = on || focused ? Color.parseColor("#174EA6") : Color.parseColor("#202124");
-        int bg = on || focused ? Color.parseColor("#E8F0FE") : Color.WHITE;
-        int stroke = on || focused ? Color.parseColor("#1A73E8") : Color.parseColor("#DADCE0");
+        int text = focused ? Color.WHITE : on ? Color.parseColor("#174EA6") : Color.parseColor("#202124");
+        int bg = focused ? Color.parseColor("#1A73E8") : on ? Color.parseColor("#E8F0FE") : Color.WHITE;
+        int stroke = focused ? Color.parseColor("#174EA6") : on ? Color.parseColor("#8AB4F8") : Color.parseColor("#DADCE0");
         button.setTextColor(ColorStateList.valueOf(text));
         button.setBackgroundTintList(ColorStateList.valueOf(bg));
         button.setStrokeColor(ColorStateList.valueOf(stroke));

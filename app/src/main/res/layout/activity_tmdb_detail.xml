@@ -515,66 +515,96 @@
                         android:visibility="gone">
 
                         <TextView
-                            android:id="@+id/episodeTitle"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
+                            android:id="@+id/episodeLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:gravity="center_vertical"
                             android:text="@string/detail_episode"
                             android:textColor="@android:color/white"
                             android:textSize="16sp"
                             android:textStyle="bold" />
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/episodeReverse"
+                            android:id="@+id/episodeTitle"
                             style="?attr/materialButtonOutlinedStyle"
                             android:layout_width="wrap_content"
                             android:layout_height="36dp"
+                            android:layout_marginStart="12dp"
+                            android:clickable="true"
+                            android:ellipsize="end"
+                            android:insetBottom="0dp"
+                            android:insetTop="0dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="false"
+                            android:gravity="center_vertical"
+                            android:maxLines="1"
                             android:minHeight="36dp"
-                            android:minWidth="58dp"
+                            android:minWidth="0dp"
                             android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
-                            android:text="@string/detail_episode_reverse"
+                            android:paddingEnd="8dp"
+                            android:singleLine="true"
+                            android:text="@string/tmdb_season_button"
                             android:textColor="@android:color/white"
-                            android:textSize="12sp"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            app:backgroundTint="@android:color/transparent"
+                            app:strokeColor="@android:color/transparent" />
+
+                        <Space
+                            android:layout_width="0dp"
+                            android:layout_height="0dp"
+                            android:layout_weight="1" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/episodeReverse"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:minHeight="36dp"
+                            android:minWidth="0dp"
+                            android:contentDescription="@string/detail_episode_reverse"
+                            android:padding="0dp"
                             app:backgroundTint="#2B3743"
+                            app:icon="@drawable/ic_action_sort_asc"
+                            app:iconGravity="textStart"
+                            app:iconPadding="0dp"
+                            app:iconSize="20dp"
+                            app:iconTint="@android:color/white"
                             app:strokeColor="@android:color/transparent" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/episodeFileName"
                             style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
+                            android:layout_width="40dp"
                             android:layout_height="36dp"
                             android:layout_marginStart="8dp"
                             android:minHeight="36dp"
-                            android:minWidth="72dp"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
+                            android:minWidth="0dp"
                             android:contentDescription="@string/detail_episode_file_name_scraped_action"
-                            android:text="@string/detail_episode_file_name_scraped"
-                            android:textColor="@android:color/white"
-                            android:textSize="12sp"
+                            android:padding="0dp"
                             app:backgroundTint="#2B3743"
+                            app:icon="@drawable/ic_action_name_full"
+                            app:iconGravity="textStart"
+                            app:iconPadding="0dp"
+                            app:iconSize="20dp"
+                            app:iconTint="@android:color/white"
                             app:strokeColor="@android:color/transparent" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/episodeViewMode"
                             style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
+                            android:layout_width="40dp"
                             android:layout_height="36dp"
                             android:layout_marginStart="8dp"
                             android:minHeight="36dp"
-                            android:minWidth="72dp"
-                            android:paddingStart="10dp"
-                            android:paddingEnd="12dp"
+                            android:minWidth="0dp"
                             android:contentDescription="@string/detail_episode_view_grid_action"
-                            android:text="@string/detail_episode_view_grid"
-                            android:textColor="@android:color/white"
-                            android:textSize="12sp"
+                            android:padding="0dp"
                             app:backgroundTint="#2B3743"
-                            app:icon="@drawable/ic_site_grid"
+                            app:icon="@drawable/ic_site_list"
                             app:iconGravity="textStart"
-                            app:iconPadding="4dp"
-                            app:iconSize="16dp"
+                            app:iconPadding="0dp"
+                            app:iconSize="20dp"
                             app:iconTint="@android:color/white"
                             app:strokeColor="@android:color/transparent" />
                     </LinearLayout>
@@ -697,6 +727,46 @@
                             android:id="@+id/episodePhotoList"
                             android:layout_width="match_parent"
                             android:layout_height="124dp"
+                            android:layout_marginTop="12dp"
+                            android:clipToPadding="false"
+                            android:paddingEnd="8dp"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/posterTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="20dp"
+                            android:text="@string/detail_tmdb_posters"
+                            android:textColor="@android:color/white"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/posterList"
+                            android:layout_width="match_parent"
+                            android:layout_height="222dp"
+                            android:layout_marginTop="12dp"
+                            android:clipToPadding="false"
+                            android:paddingEnd="8dp"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/relatedVideoTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="20dp"
+                            android:text="@string/tmdb_related_videos_label"
+                            android:textColor="@android:color/white"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/relatedVideoList"
+                            android:layout_width="match_parent"
+                            android:layout_height="180dp"
                             android:layout_marginTop="12dp"
                             android:clipToPadding="false"
                             android:paddingEnd="8dp"
@@ -1262,6 +1332,12 @@
                             android:text="@string/play_change" />
 
                         <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/playerSearch"
+                            style="@style/Control"
+                            android:layout_marginEnd="8dp"
+                            android:text="@string/play_search" />
+
+                        <com.google.android.material.textview.MaterialTextView
                             android:id="@+id/playerFullscreenAction"
                             style="@style/Control"
                             android:layout_marginEnd="8dp"
@@ -1284,6 +1360,12 @@
                             style="@style/Control"
                             android:layout_marginEnd="8dp"
                             android:text="@string/play_params" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/playerMultiThreadProxy"
+                            style="@style/Control"
+                            android:layout_marginEnd="8dp"
+                            android:text="@string/multi_thread_proxy_button" />
 
                         <com.google.android.material.textview.MaterialTextView
                             android:id="@+id/playerCodecCapability"

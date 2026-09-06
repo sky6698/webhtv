@@ -30,6 +30,8 @@ import com.fongmi.android.tv.event.ConfigEvent;
 import com.fongmi.android.tv.setting.PlaybackPerformanceCatalog;
 import com.fongmi.android.tv.setting.PlaybackPerformanceOption;
 import com.fongmi.android.tv.setting.PlaybackPerformanceSetting;
+import com.fongmi.android.tv.setting.PlaybackPerformanceUiPolicy;
+import com.fongmi.android.tv.setting.PlaybackProfileMergePolicy;
 import com.fongmi.android.tv.setting.MpvPerformanceSetting;
 import com.fongmi.android.tv.setting.IjkPerformanceSetting;
 import com.fongmi.android.tv.setting.ExoPerformanceSetting;
@@ -39,7 +41,6 @@ import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.Util;
 import com.google.android.material.button.MaterialButton;
-import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.tabs.TabLayout;
 import com.google.android.material.textview.MaterialTextView;
 
@@ -49,6 +50,7 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
 
     private Runnable callback;
     private Dialog helpDialog;
+    private Dialog modalDialog;
     private LinearLayout list;
     private TabLayout profileTabs;
     private boolean syncingProfileTabs;
@@ -69,7 +71,9 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
     @Override
     public Dialog onCreateDialog(@Nullable Bundle savedInstanceState) {
         PlaybackPerformanceSetting.ensureInitialized();
-        return new MaterialAlertDialogBuilder(requireActivity(), R.style.ThemeOverlay_WebHTV_LightDialog).setView(createView(LayoutInflater.from(requireContext()))).create();
+        Dialog dialog = new Dialog(requireActivity(), R.style.Theme_WebHTV_LightDialog);
+        dialog.setContentView(createView(LayoutInflater.from(requireContext())));
+        return dialog;
     }
 
     @Override
@@ -133,7 +137,6 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         scrollParams.topMargin = dp(16);
         root.addView(scroll, scrollParams);
         refreshRows();
-        syncProfileTabs();
         return root;
     }
 
@@ -177,9 +180,20 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         scrollParams.topMargin = dp(10);
         root.addView(scroll, scrollParams);
 
-        addHelpIntro(content, "当前播放器内核：" + playerName() + "。不知道怎么选时保持“自动”（默认）；每项说明都会明确告诉你什么情况更流畅、异常时改哪一档，以及对应代价。EXO会动态调整预载和下一会话的重缓冲恢复；MPV会在符合条件的电视4K场景自动使用低开销电视直出；IJK自动档采用稳定基线。多数底层参数需要重新进入播放或重建播放器后生效。");
+        PlaybackPerformanceUiPolicy.Split split = optionSplit();
+        addHelpIntro(content, getString(
+                R.string.player_performance_help_intro, playerName()));
+        if (split.profile() != null) {
+            addHelpSection(content,
+                    getString(R.string.player_performance_common_section));
+            addHelpItem(content, split.profile().title(),
+                    split.profile().description());
+        }
+        for (PlaybackPerformanceOption option : split.common()) {
+            addHelpItem(content, option.title(), option.description());
+        }
         String section = "";
-        for (PlaybackPerformanceOption option : options()) {
+        for (PlaybackPerformanceOption option : split.advanced()) {
             if (!section.equals(option.section())) {
                 section = option.section();
                 addHelpSection(content, section);
@@ -215,9 +229,9 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
     @Override
     public void onDestroyView() {
         if (helpDialog != null) helpDialog.dismiss();
+        if (modalDialog != null) modalDialog.dismiss();
         helpDialog = null;
-        profileTabs = null;
-        syncingProfileTabs = false;
+        modalDialog = null;
         super.onDestroyView();
     }
 
@@ -270,7 +284,8 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         button.setGravity(Gravity.CENTER);
         button.setTextSize(14);
         button.setIncludeFontPadding(false);
-        TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(button, 10, 14, 1, TypedValue.COMPLEX_UNIT_SP);
+        TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
+                button, 10, 14, 1, TypedValue.COMPLEX_UNIT_SP);
         button.setMinWidth(0);
         button.setMinimumWidth(0);
         button.setMinHeight(dp(36));
@@ -287,7 +302,7 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         button.setBackgroundTintList(ColorStateList.valueOf(Color.WHITE));
         button.setStrokeColor(ColorStateList.valueOf(Color.parseColor("#8AB4F8")));
         button.setStrokeWidth(dp(1));
-        button.setOnFocusChangeListener((view, hasFocus) -> styleAction(button, hasFocus, button.isSelected()));
+        button.setOnFocusChangeListener((view, hasFocus) -> styleAction(button, hasFocus));
         button.setOnClickListener(listener);
         return button;
     }
@@ -314,24 +329,19 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         return button;
     }
 
-    private void styleAction(MaterialButton button, boolean focused, boolean selected) {
+    private void styleAction(MaterialButton button, boolean focused) {
         button.setTextColor(ColorStateList.valueOf(Color.parseColor(focused ? "#FFFFFF" : "#174EA6")));
-        button.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor(focused ? "#1A73E8" : selected ? "#D2E3FC" : "#FFFFFF")));
-        button.setStrokeColor(ColorStateList.valueOf(Color.parseColor(focused || selected ? "#1A73E8" : "#8AB4F8")));
-        button.setStrokeWidth(dp(selected && !focused ? 2 : 1));
+        button.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor(focused ? "#1A73E8" : "#FFFFFF")));
+        button.setStrokeColor(ColorStateList.valueOf(Color.parseColor(focused ? "#1A73E8" : "#8AB4F8")));
+        button.setStrokeWidth(dp(1));
     }
 
     private void apply(int profile) {
-        if (profile == PlaybackPerformanceSetting.PROFILE_AUTO) PlaybackPerformanceSetting.applyAuto();
-        else if (profile == PlaybackPerformanceSetting.PROFILE_COMPATIBLE) PlaybackPerformanceSetting.applyCompatible();
-        else if (profile == PlaybackPerformanceSetting.PROFILE_LIGHTWEIGHT) PlaybackPerformanceSetting.applyLightweight();
-        else if (profile == PlaybackPerformanceSetting.PROFILE_ORIGINAL) PlaybackPerformanceSetting.applyOriginal();
-        else PlaybackPerformanceSetting.applyRecommended();
-        refresh();
-    }
-
-    private void reset() {
-        PlaybackPerformanceSetting.applyAuto();
+        if (profile == PlaybackPerformanceSetting.PROFILE_LIGHTWEIGHT) {
+            PlaybackPerformanceSetting.applyLightweight();
+        } else {
+            PlaybackPerformanceSetting.applyAuto();
+        }
         refresh();
     }
 
@@ -340,6 +350,11 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         syncProfileTabs();
         ConfigEvent.playerPerformance();
         if (callback != null) callback.run();
+    }
+
+    private void reset() {
+        PlaybackPerformanceSetting.applyAuto();
+        refresh();
     }
 
     private TabLayout createProfileTabs() {
@@ -351,10 +366,7 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         tabs.setTabTextColors(Color.parseColor("#5F6368"), Color.parseColor("#1A73E8"));
         tabs.setTabRippleColor(ColorStateList.valueOf(Color.TRANSPARENT));
         tabs.setUnboundedRipple(false);
-        int[] labels = {R.string.player_performance_auto, R.string.player_performance_recommended, R.string.player_performance_compatible, R.string.player_performance_lightweight, R.string.player_performance_original};
-        for (int label : labels) tabs.addTab(tabs.newTab().setText(label), false);
         tabs.setFocusable(false);
-        tabs.post(() -> configureProfileTabFocus(tabs));
         tabs.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
             @Override
             public void onTabSelected(TabLayout.Tab tab) {
@@ -363,7 +375,14 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
             }
 
             @Override public void onTabUnselected(TabLayout.Tab tab) { }
-            @Override public void onTabReselected(TabLayout.Tab tab) { }
+            @Override
+            public void onTabReselected(TabLayout.Tab tab) {
+                if (syncingProfileTabs) return;
+                if (profileAt(tab.getPosition())
+                        == PlaybackPerformanceSetting.PROFILE_AUTO) {
+                    apply(PlaybackPerformanceSetting.PROFILE_AUTO);
+                }
+            }
         });
         syncProfileTabs(tabs);
         return tabs;
@@ -387,51 +406,110 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
 
     private void syncProfileTabs(TabLayout tabs) {
         syncingProfileTabs = true;
+        int[] profiles = PlaybackProfileMergePolicy.selectableProfiles(
+                PlaybackPerformanceSetting.isRecommendedMerged());
+        boolean rebuilt = !profileTabsMatch(tabs, profiles);
+        if (rebuilt) {
+            tabs.removeAllTabs();
+            for (int profile : profiles) {
+                tabs.addTab(tabs.newTab()
+                        .setText(profileLabel(profile))
+                        .setTag(profile), false);
+            }
+        }
+        for (int index = 0; index < profiles.length; index++) {
+            TabLayout.Tab tab = tabs.getTabAt(index);
+            if (tab != null) tab.setText(profileLabel(profiles[index]));
+        }
         int position = profilePosition(PlaybackPerformanceSetting.getProfile());
         tabs.selectTab(position < 0 ? null : tabs.getTabAt(position));
         syncingProfileTabs = false;
+        if (rebuilt) tabs.post(() -> configureProfileTabFocus(tabs));
+    }
+
+    private boolean profileTabsMatch(TabLayout tabs, int[] profiles) {
+        if (tabs.getTabCount() != profiles.length) return false;
+        for (int index = 0; index < profiles.length; index++) {
+            TabLayout.Tab tab = tabs.getTabAt(index);
+            if (tab == null
+                    || !Integer.valueOf(profiles[index]).equals(tab.getTag())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private int profileAt(int position) {
-        return switch (position) {
-            case 1 -> PlaybackPerformanceSetting.PROFILE_RECOMMENDED;
-            case 2 -> PlaybackPerformanceSetting.PROFILE_COMPATIBLE;
-            case 3 -> PlaybackPerformanceSetting.PROFILE_LIGHTWEIGHT;
-            case 4 -> PlaybackPerformanceSetting.PROFILE_ORIGINAL;
-            default -> PlaybackPerformanceSetting.PROFILE_AUTO;
-        };
+        int[] profiles = PlaybackProfileMergePolicy.selectableProfiles(
+                PlaybackPerformanceSetting.isRecommendedMerged());
+        return position >= 0 && position < profiles.length
+                ? profiles[position]
+                : PlaybackPerformanceSetting.PROFILE_AUTO;
     }
 
     private int profilePosition(int profile) {
+        return PlaybackProfileMergePolicy.positionOf(
+                profile,
+                PlaybackPerformanceSetting.isRecommendedMerged());
+    }
+
+    private CharSequence profileLabel(int profile) {
         return switch (profile) {
-            case PlaybackPerformanceSetting.PROFILE_AUTO -> 0;
-            case PlaybackPerformanceSetting.PROFILE_RECOMMENDED -> 1;
-            case PlaybackPerformanceSetting.PROFILE_COMPATIBLE -> 2;
-            case PlaybackPerformanceSetting.PROFILE_LIGHTWEIGHT -> 3;
-            case PlaybackPerformanceSetting.PROFILE_ORIGINAL -> 4;
-            default -> -1;
+            case PlaybackPerformanceSetting.PROFILE_LIGHTWEIGHT ->
+                    getString(R.string.player_performance_lightweight);
+            default -> {
+                int overrideCount = PlaybackPerformanceSetting.getOverrideCount(
+                        PlayerSetting.getPlayer());
+                yield overrideCount == 0
+                        ? getString(R.string.player_performance_auto)
+                        : getString(R.string.player_performance_auto)
+                        + " · 已改" + overrideCount + "项";
+            }
         };
     }
 
     private void refreshRows() {
         if (list == null) return;
         list.removeAllViews();
+        PlaybackPerformanceUiPolicy.Split split = optionSplit();
+        addHeader(getString(R.string.player_performance_common_section));
+        for (PlaybackPerformanceOption option : split.common()) {
+            addRow(option.id(), option.title(), optionValue(option.id()),
+                    optionAction(option.id()));
+        }
         String section = "";
-        for (PlaybackPerformanceOption option : options()) {
+        for (PlaybackPerformanceOption option : split.advanced()) {
             if (!section.equals(option.section())) {
                 section = option.section();
                 addHeader(section);
             }
-            addRow(option.title(), optionValue(option.id()), optionAction(option.id()));
+            addRow(option.id(), option.title(), optionValue(option.id()),
+                    optionAction(option.id()));
         }
     }
 
-    private boolean isExo() {
-        return PlayerSetting.getPlayer() == PlayerSetting.EXO;
+    private void showConfirmDialog(
+            int title,
+            int message,
+            int confirm,
+            Runnable action) {
+        showModal(PlaybackPerformanceModal.confirm(
+                requireContext(),
+                getString(title),
+                getString(message),
+                getString(R.string.dialog_cancel),
+                getString(confirm),
+                action));
     }
 
-    private boolean isIjk() {
-        return PlayerSetting.getPlayer() == PlayerSetting.IJK;
+    private void showModal(Dialog dialog) {
+        if (dialog == null) return;
+        if (modalDialog != null) modalDialog.dismiss();
+        modalDialog = dialog;
+        dialog.setOnDismissListener(ignored -> {
+            if (modalDialog == dialog) modalDialog = null;
+        });
+        dialog.show();
     }
 
     private String playerName() {
@@ -442,8 +520,9 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         };
     }
 
-    private java.util.List<PlaybackPerformanceOption> options() {
-        return PlaybackPerformanceCatalog.forKernel(PlayerSetting.getPlayer());
+    private PlaybackPerformanceUiPolicy.Split optionSplit() {
+        return PlaybackPerformanceUiPolicy.splitForKernel(
+                PlayerSetting.getPlayer());
     }
 
     private String optionValue(String id) {
@@ -454,21 +533,28 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
             case PlaybackPerformanceCatalog.ADAPTIVE_DOWNGRADE -> onOff(PlaybackPerformanceSetting.isAdaptiveDowngradeEnabled());
             case PlaybackPerformanceCatalog.BANDWIDTH_METER -> onOff(PlaybackPerformanceSetting.isBandwidthMeterEnabled());
             case PlaybackPerformanceCatalog.TUNNEL -> onOff(PlayerSetting.isTunnel());
-            case PlaybackPerformanceCatalog.BUFFER_TIME -> PlayerSetting.getBuffer() + "/15";
-            case PlaybackPerformanceCatalog.BUFFER_BYTES -> bufferBytesText();
-            case PlaybackPerformanceCatalog.BACK_BUFFER -> backBufferText();
-            case PlaybackPerformanceCatalog.PLAY_CACHE -> playCacheText();
+            case PlaybackPerformanceCatalog.BUFFER_TIME -> PlaybackPerformanceSetting.getForwardBufferText();
+            case PlaybackPerformanceCatalog.BUFFER_BYTES -> PlaybackPerformanceSetting.getMemoryBufferText();
+            case PlaybackPerformanceCatalog.BACK_BUFFER -> PlaybackPerformanceSetting.getPlayedDataRetentionText();
+            case PlaybackPerformanceCatalog.PLAY_CACHE -> PlaybackPerformanceSetting.getPlaybackDiskCacheText();
             case PlaybackPerformanceCatalog.LOAD_SELECTED_TRACKS -> onOff(PlaybackPerformanceSetting.isLoadOnlySelectedTracksEnabled());
-            case PlaybackPerformanceCatalog.PRELOAD -> PlaybackPerformanceSetting.isAuto() ? "自动" : onOff(PreloadSetting.isPreload());
-            case PlaybackPerformanceCatalog.PRELOAD_THREADS -> PlaybackPerformanceSetting.isAuto() ? "自动 · 0～2 条" : PreloadSetting.getPreloadThreads() + " 条";
+            case PlaybackPerformanceCatalog.PRELOAD -> PlaybackPerformanceSetting.isAuto(id) ? "自动 · 按资源" : onOff(PreloadSetting.isPreload());
+            case PlaybackPerformanceCatalog.PRELOAD_THREADS -> PlaybackPerformanceSetting.isAuto(id) ? "自动 · 0～2 条" : PreloadSetting.getPreloadThreads() + " 条";
             case PlaybackPerformanceCatalog.PRELOAD_SIZE -> FileUtil.byteCountToDisplaySize(PreloadSetting.getPreloadSizeBytes());
-            case PlaybackPerformanceCatalog.PRELOAD_TIME -> PlaybackPerformanceSetting.isAuto() ? "自动 · 10～30 秒" : PreloadSetting.getPreloadTimeSeconds() + " 秒";
+            case PlaybackPerformanceCatalog.PRELOAD_TIME -> PlaybackPerformanceSetting.isAuto(id) ? "自动 · 单次10～30秒" : "单次" + PreloadSetting.getPreloadTimeSeconds() + "秒";
+            case PlaybackPerformanceCatalog.PRELOAD_AHEAD -> preloadAheadText();
+            case PlaybackPerformanceCatalog.PRELOAD_PAUSE -> pausePreloadText();
             case PlaybackPerformanceCatalog.CODEC_ASYNC -> ExoPerformanceSetting.getCodecQueueText();
             case PlaybackPerformanceCatalog.DYNAMIC_SCHEDULING -> onOff(PlaybackPerformanceSetting.isDynamicSchedulingEnabled());
             case PlaybackPerformanceCatalog.DURATION_PROGRESS -> ExoPerformanceSetting.getCodecQueueMode() == ExoPerformanceSetting.CODEC_QUEUE_SYNC ? "同步队列不可用" : onOff(PlaybackPerformanceSetting.isVideoDurationProgressEnabled());
             case PlaybackPerformanceCatalog.LATE_DROP -> onOff(PlaybackPerformanceSetting.isLateDropInputEnabled());
             case PlaybackPerformanceCatalog.SURFACE_FIXED_SIZE -> onOff(PlaybackPerformanceSetting.isSurfaceFixedSizeEnabled());
             case PlaybackPerformanceCatalog.DECODER_FALLBACK -> onOff(PlaybackPerformanceSetting.isDecoderFallbackEnabled());
+            case PlaybackPerformanceCatalog.DV7_HDR10_FALLBACK ->
+                    PlayerSetting.getPlayer() == PlayerSetting.MPV
+                            ? PlaybackPerformanceSetting.getMpvDv7HandlingText()
+                            : PlaybackPerformanceSetting.getDv7HandlingText();
+            case PlaybackPerformanceCatalog.DEFERRED_CUES -> onOff(PlaybackPerformanceSetting.isDeferredCuesEnabled());
             case PlaybackPerformanceCatalog.SOFT_VIDEO_TUNE -> onOff(PlaybackPerformanceSetting.isSoftVideoTuneEnabled());
             case PlaybackPerformanceCatalog.AUDIO_PASSTHROUGH -> onOff(PlayerSetting.isAudioPassThrough());
             case PlaybackPerformanceCatalog.PREFER_AAC -> onOff(PlayerSetting.isPreferAAC());
@@ -476,6 +562,7 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
             case PlaybackPerformanceCatalog.VIDEO_SOFT_PREFER -> onOff(PlayerSetting.isVideoPrefer());
             case PlaybackPerformanceCatalog.MPV_OUTPUT -> MpvPerformanceSetting.getOutputModeText();
             case PlaybackPerformanceCatalog.MPV_RENDER -> mpvRenderText();
+            case PlaybackPerformanceCatalog.MPV_VULKAN_BACKEND -> MpvPerformanceSetting.getVulkanBackendText();
             case PlaybackPerformanceCatalog.MPV_HWDEC -> MpvPerformanceSetting.getHwdecText();
             case PlaybackPerformanceCatalog.MPV_FRAME_RATE -> MpvPerformanceSetting.getFrameRateText();
             case PlaybackPerformanceCatalog.MPV_HLS_BITRATE -> MpvPerformanceSetting.getHlsBitrateText();
@@ -487,20 +574,24 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
             case PlaybackPerformanceCatalog.MPV_SOFT_TUNE -> MpvPerformanceSetting.getSoftTuneText();
             case PlaybackPerformanceCatalog.MPV_VERBOSE_LOG -> MpvPerformanceSetting.isVerboseLog() ? "详细" : "正常";
             case PlaybackPerformanceCatalog.IJK_SCENE -> IjkPerformanceSetting.getSceneText();
-            case PlaybackPerformanceCatalog.IJK_BUFFER -> IjkPerformanceSetting.getBufferMb() + "MB";
+            case PlaybackPerformanceCatalog.IJK_BUFFER -> ijkBufferText();
             case PlaybackPerformanceCatalog.IJK_PACKET_BUFFERING -> onOff(IjkPerformanceSetting.isPacketBuffering());
-            case PlaybackPerformanceCatalog.IJK_WATER -> IjkPerformanceSetting.getWaterText();
-            case PlaybackPerformanceCatalog.IJK_PICTURE_QUEUE -> IjkPerformanceSetting.getPictureQueue() + "帧";
+            case PlaybackPerformanceCatalog.IJK_WATER -> PlaybackPerformanceSetting.isAuto(PlayerSetting.IJK, id)
+                    ? "自动 · 0.1～5秒" : IjkPerformanceSetting.getWaterText();
+            case PlaybackPerformanceCatalog.IJK_PICTURE_QUEUE -> PlaybackPerformanceSetting.isAuto(PlayerSetting.IJK, id)
+                    ? "自动 · 3帧" : IjkPerformanceSetting.getPictureQueue() + "帧";
             case PlaybackPerformanceCatalog.IJK_FRAME_DROP -> IjkPerformanceSetting.getDropText();
             case PlaybackPerformanceCatalog.IJK_ACCURATE_SEEK -> onOff(IjkPerformanceSetting.isAccurateSeek());
             case PlaybackPerformanceCatalog.IJK_PROBE -> IjkPerformanceSetting.getProbeText();
-            case PlaybackPerformanceCatalog.IJK_SOFT_TUNE -> IjkPerformanceSetting.getSoftTuneText();
+            case PlaybackPerformanceCatalog.IJK_SOFT_TUNE -> PlaybackPerformanceSetting.isAuto(PlayerSetting.IJK, id)
+                    ? "自动 · 关闭～积极" : IjkPerformanceSetting.getSoftTuneText();
             case PlaybackPerformanceCatalog.IJK_RTSP_TRANSPORT -> IjkPerformanceSetting.getRtspTransportText();
             case PlaybackPerformanceCatalog.IJK_RECONNECT -> onOff(IjkPerformanceSetting.isReconnect());
             case PlaybackPerformanceCatalog.EXO_FRAME_RATE -> ExoPerformanceSetting.getFrameRateText();
-            case PlaybackPerformanceCatalog.EXO_START_BUFFER -> formatSeconds(ExoPerformanceSetting.getStartBufferMs());
-            case PlaybackPerformanceCatalog.EXO_REBUFFER -> PlaybackPerformanceSetting.isAuto() ? "自动 · " + formatSeconds(ExoPerformanceSetting.getRebufferMs()) + "（2～8秒）" : formatSeconds(ExoPerformanceSetting.getRebufferMs());
-            case PlaybackPerformanceCatalog.EXO_PRIORITIZE_TIME -> onOff(ExoPerformanceSetting.isPrioritizeTime());
+            case PlaybackPerformanceCatalog.EXO_START_BUFFER -> PlaybackPerformanceSetting.getExoStartBufferText();
+            case PlaybackPerformanceCatalog.EXO_REBUFFER -> PlaybackPerformanceSetting.getExoRebufferText();
+            case PlaybackPerformanceCatalog.EXO_PRIORITIZE_TIME -> PlaybackPerformanceSetting.getExoPrioritizeTimeText();
+            case PlaybackPerformanceCatalog.EXO_NETWORK_PROTECTION -> ExoPerformanceSetting.getNetworkProtectionText();
             default -> "";
         };
     }
@@ -514,7 +605,7 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
             case PlaybackPerformanceCatalog.BANDWIDTH_METER -> () -> toggle(PlaybackPerformanceSetting::isBandwidthMeterEnabled, PlaybackPerformanceSetting::putBandwidthMeterEnabled);
             case PlaybackPerformanceCatalog.TUNNEL -> () -> {
                 PlayerSetting.putTunnel(!PlayerSetting.isTunnel());
-                PlaybackPerformanceSetting.markCustom();
+                PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.TUNNEL);
                 refresh();
             };
             case PlaybackPerformanceCatalog.BUFFER_TIME -> this::cycleBuffer;
@@ -524,12 +615,14 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
             case PlaybackPerformanceCatalog.LOAD_SELECTED_TRACKS -> () -> toggle(PlaybackPerformanceSetting::isLoadOnlySelectedTracksEnabled, PlaybackPerformanceSetting::putLoadOnlySelectedTracksEnabled);
             case PlaybackPerformanceCatalog.PRELOAD -> () -> {
                 PreloadSetting.putPreload(!PreloadSetting.isPreload());
-                PlaybackPerformanceSetting.markCustom();
+                PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.PRELOAD);
                 refresh();
             };
             case PlaybackPerformanceCatalog.PRELOAD_THREADS -> this::cyclePreloadThreads;
             case PlaybackPerformanceCatalog.PRELOAD_SIZE -> this::cyclePreloadSize;
             case PlaybackPerformanceCatalog.PRELOAD_TIME -> this::cyclePreloadTime;
+            case PlaybackPerformanceCatalog.PRELOAD_AHEAD -> this::cyclePreloadAhead;
+            case PlaybackPerformanceCatalog.PRELOAD_PAUSE -> this::cyclePausePreload;
             case PlaybackPerformanceCatalog.CODEC_ASYNC -> () -> {
                 ExoPerformanceSetting.putCodecQueueMode((ExoPerformanceSetting.getCodecQueueMode() + 1) % 3);
                 refresh();
@@ -539,18 +632,41 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
             case PlaybackPerformanceCatalog.LATE_DROP -> () -> toggle(PlaybackPerformanceSetting::isLateDropInputEnabled, PlaybackPerformanceSetting::putLateDropInputEnabled);
             case PlaybackPerformanceCatalog.SURFACE_FIXED_SIZE -> () -> toggle(PlaybackPerformanceSetting::isSurfaceFixedSizeEnabled, PlaybackPerformanceSetting::putSurfaceFixedSizeEnabled);
             case PlaybackPerformanceCatalog.DECODER_FALLBACK -> () -> toggle(PlaybackPerformanceSetting::isDecoderFallbackEnabled, PlaybackPerformanceSetting::putDecoderFallbackEnabled);
+            case PlaybackPerformanceCatalog.DV7_HDR10_FALLBACK -> () -> {
+                if (PlayerSetting.getPlayer() == PlayerSetting.MPV) {
+                    int mode = PlaybackPerformanceSetting.getMpvDv7HandlingMode();
+                    PlaybackPerformanceSetting.putMpvDv7HandlingMode(
+                            mode == PlaybackPerformanceSetting.DV7_HANDLING_P81
+                                    ? PlaybackPerformanceSetting.DV7_HANDLING_HDR10
+                                    : PlaybackPerformanceSetting.DV7_HANDLING_P81);
+                    refresh();
+                    return;
+                }
+                int mode = PlaybackPerformanceSetting.getDv7HandlingMode();
+                PlaybackPerformanceSetting.putDv7HandlingMode(
+                        mode == PlaybackPerformanceSetting.DV7_HANDLING_P81
+                                ? PlaybackPerformanceSetting.DV7_HANDLING_HDR10
+                                : PlaybackPerformanceSetting.DV7_HANDLING_P81);
+                refresh();
+            };
+            case PlaybackPerformanceCatalog.DEFERRED_CUES -> () -> toggle(PlaybackPerformanceSetting::isDeferredCuesEnabled, PlaybackPerformanceSetting::putDeferredCuesEnabled);
             case PlaybackPerformanceCatalog.SOFT_VIDEO_TUNE -> () -> toggle(PlaybackPerformanceSetting::isSoftVideoTuneEnabled, PlaybackPerformanceSetting::putSoftVideoTuneEnabled);
-            case PlaybackPerformanceCatalog.AUDIO_PASSTHROUGH -> () -> togglePlayer(PlayerSetting::isAudioPassThrough, PlayerSetting::putAudioPassThrough);
-            case PlaybackPerformanceCatalog.PREFER_AAC -> () -> togglePlayer(PlayerSetting::isPreferAAC, PlayerSetting::putPreferAAC);
-            case PlaybackPerformanceCatalog.AUDIO_SOFT_PREFER -> () -> togglePlayer(PlayerSetting::isAudioPrefer, PlayerSetting::putAudioPrefer);
-            case PlaybackPerformanceCatalog.VIDEO_SOFT_PREFER -> () -> togglePlayer(PlayerSetting::isVideoPrefer, PlayerSetting::putVideoPrefer);
+            case PlaybackPerformanceCatalog.AUDIO_PASSTHROUGH -> () -> togglePlayer(id, PlayerSetting::isAudioPassThrough, PlayerSetting::putAudioPassThrough);
+            case PlaybackPerformanceCatalog.PREFER_AAC -> () -> togglePlayer(id, PlayerSetting::isPreferAAC, PlayerSetting::putPreferAAC);
+            case PlaybackPerformanceCatalog.AUDIO_SOFT_PREFER -> () -> togglePlayer(id, PlayerSetting::isAudioPrefer, PlayerSetting::putAudioPrefer);
+            case PlaybackPerformanceCatalog.VIDEO_SOFT_PREFER -> () -> togglePlayer(id, PlayerSetting::isVideoPrefer, PlayerSetting::putVideoPrefer);
             case PlaybackPerformanceCatalog.MPV_OUTPUT -> () -> {
                 MpvPerformanceSetting.putOutputMode((MpvPerformanceSetting.getOutputMode() + 1) % 3);
                 refresh();
             };
             case PlaybackPerformanceCatalog.MPV_RENDER -> !isMpvVulkanAvailable() && PlayerSetting.getMpvRender() == PlayerSetting.MPV_RENDER_OPENGL ? null : () -> {
                 PlayerSetting.putMpvRender(PlayerSetting.getMpvRender() == PlayerSetting.MPV_RENDER_OPENGL ? PlayerSetting.MPV_RENDER_VULKAN : PlayerSetting.MPV_RENDER_OPENGL);
-                PlaybackPerformanceSetting.markCustom();
+                PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.MPV_RENDER);
+                refresh();
+            };
+            case PlaybackPerformanceCatalog.MPV_VULKAN_BACKEND -> () -> {
+                MpvPerformanceSetting.putVulkanBackend(
+                        MpvPerformanceSetting.nextVulkanBackend());
                 refresh();
             };
             case PlaybackPerformanceCatalog.MPV_HWDEC -> () -> {
@@ -598,9 +714,7 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
                 refresh();
             };
             case PlaybackPerformanceCatalog.IJK_BUFFER -> () -> {
-                int current = IjkPerformanceSetting.getBufferMb();
-                IjkPerformanceSetting.putBufferMb(current == 4 ? 8 : current == 8 ? 15 : 4);
-                refresh();
+                cycleBufferBytes();
             };
             case PlaybackPerformanceCatalog.IJK_PACKET_BUFFERING -> () -> {
                 IjkPerformanceSetting.putPacketBuffering(!IjkPerformanceSetting.isPacketBuffering());
@@ -640,7 +754,7 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
                 refresh();
             };
             case PlaybackPerformanceCatalog.EXO_FRAME_RATE -> () -> {
-                ExoPerformanceSetting.putFrameRateMode((ExoPerformanceSetting.getFrameRateMode() + 1) % 2);
+                ExoPerformanceSetting.putFrameRateMode((ExoPerformanceSetting.getFrameRateMode() + 1) % 4);
                 refresh();
             };
             case PlaybackPerformanceCatalog.EXO_START_BUFFER -> () -> {
@@ -655,6 +769,10 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
                 ExoPerformanceSetting.putPrioritizeTime(!ExoPerformanceSetting.isPrioritizeTime());
                 refresh();
             };
+            case PlaybackPerformanceCatalog.EXO_NETWORK_PROTECTION -> () -> {
+                ExoPerformanceSetting.putNetworkProtectionMode(ExoPerformanceSetting.nextNetworkProtectionMode());
+                refresh();
+            };
             default -> null;
         };
     }
@@ -664,9 +782,9 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         refresh();
     }
 
-    private void togglePlayer(java.util.function.BooleanSupplier getter, java.util.function.Consumer<Boolean> setter) {
+    private void togglePlayer(String optionId, java.util.function.BooleanSupplier getter, java.util.function.Consumer<Boolean> setter) {
         setter.accept(!getter.getAsBoolean());
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(optionId);
         refresh();
     }
 
@@ -681,7 +799,9 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         list.addView(header, params);
     }
 
-    private void addRow(String label, String value, Runnable action) {
+    private void addRow(String id, String label, String value, Runnable action) {
+        boolean overridden = PlaybackPerformanceSetting.isOverridden(
+                PlayerSetting.getPlayer(), id);
         MaterialButton button = new MaterialButton(requireContext());
         button.setAllCaps(false);
         button.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
@@ -692,24 +812,31 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         button.setText(label + "    " + value);
         button.setTextSize(14);
         button.setTextColor(ColorStateList.valueOf(Color.parseColor("#202124")));
-        button.setBackgroundTintList(ColorStateList.valueOf(Color.WHITE));
+        button.setBackgroundTintList(ColorStateList.valueOf(overridden
+                ? Color.parseColor("#E8F0FE") : Color.WHITE));
         button.setCornerRadius(dp(6));
-        button.setStrokeColor(ColorStateList.valueOf(Color.parseColor("#C4C7C5")));
+        button.setStrokeColor(ColorStateList.valueOf(Color.parseColor(overridden
+                ? "#8AB4F8" : "#C4C7C5")));
         button.setStrokeWidth(dp(1));
         button.setFocusable(true);
         button.setFocusableInTouchMode(Util.isLeanback());
         button.setEnabled(action != null);
-        button.setOnFocusChangeListener((view, hasFocus) -> styleRow(button, action != null, hasFocus));
+        button.setOnFocusChangeListener((view, hasFocus) ->
+                styleRow(button, action != null, overridden, hasFocus));
         if (action != null) button.setOnClickListener(view -> action.run());
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
         params.bottomMargin = dp(7);
         list.addView(button, params);
     }
 
-    private void styleRow(MaterialButton button, boolean enabled, boolean focused) {
+    private void styleRow(MaterialButton button, boolean enabled,
+                          boolean overridden, boolean focused) {
         int text = focused ? Color.WHITE : enabled ? Color.parseColor("#202124") : Color.parseColor("#5F6368");
-        int bg = focused ? Color.parseColor("#1A73E8") : Color.WHITE;
-        int stroke = focused ? Color.parseColor("#1A73E8") : Color.parseColor("#C4C7C5");
+        int bg = focused ? Color.parseColor("#1A73E8")
+                : overridden ? Color.parseColor("#E8F0FE") : Color.WHITE;
+        int stroke = focused ? Color.parseColor("#1A73E8")
+                : overridden ? Color.parseColor("#8AB4F8")
+                : Color.parseColor("#C4C7C5");
         button.setTextColor(ColorStateList.valueOf(text));
         button.setBackgroundTintList(ColorStateList.valueOf(bg));
         button.setStrokeColor(ColorStateList.valueOf(stroke));
@@ -718,31 +845,33 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
 
     private void toggleRender() {
         PlayerSetting.putRender(PlayerSetting.getRender() == PlayerSetting.RENDER_SURFACE ? PlayerSetting.RENDER_TEXTURE : PlayerSetting.RENDER_SURFACE);
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.RENDER);
         refresh();
     }
 
     private void cycleBuffer() {
-        PlayerSetting.putBuffer(PlayerSetting.getBuffer() >= 15 ? 1 : PlayerSetting.getBuffer() + 1);
-        PlaybackPerformanceSetting.markCustom();
+        PlayerSetting.putBuffer(PlayerSetting.getBuffer() >= 10 ? 1 : PlayerSetting.getBuffer() + 1);
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.BUFFER_TIME);
         refresh();
     }
 
     private void cycleBufferBytes() {
         PlayerSetting.putBufferBytesOption((PlayerSetting.getBufferBytesOption() + 1) % 4);
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(PlayerSetting.getPlayer() == PlayerSetting.IJK
+                ? PlaybackPerformanceCatalog.IJK_BUFFER
+                : PlaybackPerformanceCatalog.BUFFER_BYTES);
         refresh();
     }
 
     private void cycleBackBuffer() {
         PlayerSetting.putBackBufferOption((PlayerSetting.getBackBufferOption() + 1) % 4);
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.BACK_BUFFER);
         refresh();
     }
 
     private void cyclePlayCache() {
         PlayerSetting.putPlayCacheOption((PlayerSetting.getPlayCacheOption() + 1) % 5);
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.PLAY_CACHE);
         refresh();
     }
 
@@ -750,13 +879,13 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         int value = PreloadSetting.getPreloadThreads() + 1;
         if (value > PreloadSetting.MAX_THREADS) value = PreloadSetting.MIN_THREADS;
         PreloadSetting.putPreloadThreads(value);
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.PRELOAD_THREADS);
         refresh();
     }
 
     private void cyclePreloadSize() {
         PreloadSetting.putPreloadSizeMb(PreloadSetting.getNextPreloadSizeMb());
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.PRELOAD_SIZE);
         refresh();
     }
 
@@ -764,8 +893,44 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
         int value = PreloadSetting.getPreloadTimeSeconds() + PreloadSetting.STEP_TIME_SECONDS;
         if (value > PreloadSetting.MAX_TIME_SECONDS) value = PreloadSetting.MIN_TIME_SECONDS;
         PreloadSetting.putPreloadTimeSeconds(value);
-        PlaybackPerformanceSetting.markCustom();
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.PRELOAD_TIME);
         refresh();
+    }
+
+    private void cyclePreloadAhead() {
+        PreloadSetting.putPreloadAheadSeconds(PreloadSetting.getNextPreloadAheadSeconds());
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.PRELOAD_AHEAD);
+        refresh();
+    }
+
+    private void cyclePausePreload() {
+        PreloadSetting.putPausePreloadPolicy(PreloadSetting.getNextPausePreloadPolicy());
+        PlaybackPerformanceSetting.markOverride(PlaybackPerformanceCatalog.PRELOAD_PAUSE);
+        refresh();
+    }
+
+    private String preloadAheadText() {
+        int seconds = PreloadSetting.getPreloadAheadSeconds();
+        return seconds == PreloadSetting.WHOLE_MEDIA_AHEAD_SECONDS
+                ? "整部影片" : seconds / 60 + " 分钟";
+    }
+
+    private String ijkBufferText() {
+        long configuredBytes = PlayerSetting.getBufferBytes(PlayerSetting.IJK);
+        if (configuredBytes > 0) {
+            return FileUtil.byteCountToDisplaySize(configuredBytes);
+        }
+        return PlaybackPerformanceSetting.isAuto(
+                PlayerSetting.IJK,
+                PlaybackPerformanceCatalog.IJK_BUFFER)
+                ? "自动 · 4～15MB" : IjkPerformanceSetting.getBufferMb() + "MB";
+    }
+
+    private String pausePreloadText() {
+        return switch (PreloadSetting.getPausePreloadPolicy()) {
+            case PreloadSetting.PAUSE_PRELOAD_ALWAYS -> "始终";
+            default -> "仅 WiFi";
+        };
     }
 
     private String renderText() {
@@ -773,40 +938,19 @@ public final class PlaybackPerformanceDialog extends DialogFragment {
     }
 
     private String mpvRenderText() {
-        if (PlayerSetting.getMpvRender() == PlayerSetting.MPV_RENDER_VULKAN) return isMpvVulkanAvailable() ? "Vulkan" : "Vulkan（实际回退 OpenGL）";
-        return isMpvVulkanAvailable() ? "OpenGL" : "OpenGL（Vulkan 不可用）";
+        boolean automatic = PlaybackPerformanceSetting.isAuto(
+                PlayerSetting.MPV, PlaybackPerformanceCatalog.MPV_RENDER);
+        if (PlayerSetting.getMpvRender() == PlayerSetting.MPV_RENDER_VULKAN) {
+            return isMpvVulkanAvailable()
+                    ? "Vulkan" : "Vulkan（实际回退 OpenGL）";
+        }
+        String value = isMpvVulkanAvailable()
+                ? "OpenGL" : "OpenGL（Vulkan 不可用）";
+        return automatic ? "自动 · " + value : value;
     }
 
     private boolean isMpvVulkanAvailable() {
         return MPVLib.isVulkanRendererAvailable(App.get());
-    }
-
-    private String bufferBytesText() {
-        return switch (PlayerSetting.getBufferBytesOption()) {
-            case 1 -> "64MB";
-            case 2 -> "128MB";
-            case 3 -> "256MB";
-            default -> "自动";
-        };
-    }
-
-    private String backBufferText() {
-        return switch (PlayerSetting.getBackBufferOption()) {
-            case 1 -> "15秒";
-            case 2 -> "30秒";
-            case 3 -> "60秒";
-            default -> "关闭";
-        };
-    }
-
-    private String playCacheText() {
-        return switch (PlayerSetting.getPlayCacheOption()) {
-            case 1 -> "256MB";
-            case 2 -> "512MB";
-            case 3 -> "1GB";
-            case 4 -> "2GB";
-            default -> "128MB";
-        };
     }
 
     private String onOff(boolean value) {

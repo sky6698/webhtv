@@ -21,18 +21,26 @@ android {
     namespace = 'com.fongmi.android.tv'
 
     compileSdk libs.versions.compileSdk.get().toInteger()
+    ndkVersion "29.0.14206865"
 
     defaultConfig {
         applicationId "com.silent.android.webhtv"
         minSdk libs.versions.minSdk.get().toInteger()
         targetSdk libs.versions.targetSdk.get().toInteger()
-        versionCode 556
-        versionName "5.5.6"
+        versionCode 560
+        versionName "5.6.0"
         buildConfigField "String", "BUILD_TIME", "\"${buildTime}\""
         buildConfigField "String", "BUILD_TAG", "\"${releaseTag}\""
+        buildConfigField "String", "MEDIA3_VERSION", "\"${libs.versions.media3.get()}\""
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments = ["room.schemaLocation": "$projectDir/schemas".toString(), "eventBusIndex": "com.fongmi.android.tv.event.EventIndex"]
+            }
+        }
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_PLATFORM=android-26"
+                cppFlags "-std=c++20", "-Wall", "-Wextra", "-Werror=return-type"
             }
         }
     }
@@ -107,6 +115,13 @@ android {
         sourceCompatibility JavaVersion.VERSION_21
         targetCompatibility JavaVersion.VERSION_21
     }
+
+    externalNativeBuild {
+        cmake {
+            path file("src/main/cpp/CMakeLists.txt")
+            version "3.22.1"
+        }
+    }
 }
 
 androidComponents {
@@ -124,11 +139,13 @@ dependencies {
     implementation fileTree(dir: "libs", include: ["*.aar", "*.jar"])
     implementation project(':catvod')
     implementation project(':chaquo')
+    implementation project(':nodejs')
     implementation project(':quickjs')
     implementation libs.appcompat
     implementation libs.lifecycle.service
     implementation libs.media
     implementation libs.bundles.media3
+    implementation libs.exoplayer.hdr.utils
     implementation libs.nextlib.media3ext
     implementation libs.palette
     implementation libs.recyclerview
@@ -140,9 +157,11 @@ dependencies {
     implementation libs.android.gif.drawable
     implementation libs.bundles.glide
     implementation libs.bundles.jupnp
+    implementation libs.commons.compress
     implementation libs.customactivityoncrash
     implementation libs.eventbus
     implementation libs.flexbox
+    implementation libs.tukaani.xz
     implementation libs.jgit
     implementation libs.lottie
     implementation libs.material
@@ -153,6 +172,7 @@ dependencies {
     implementation libs.simple.xml
     implementation libs.textdrawable
     implementation libs.tensorflow.lite
+    implementation libs.tink.android
     implementation libs.zxing.core
     leanbackImplementation libs.leanback
     leanbackImplementation libs.androidautosize
